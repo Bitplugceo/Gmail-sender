@@ -1,3 +1,4 @@
+S
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -180,7 +181,7 @@ Best regards</textarea>
         <button class="btn" onclick="disconnectGmail()">Disconnect</button>
       </div>
       <div class="note">
-        Uses Google's browser OAuth flow and Gmail API. No Gmail password or client secret is stored here.
+        Uses Google's browser OAuth flow and Gmail API. The page remembers your account and attempts silent reconnection after reload; Google may still require you to reconnect if authorization expires or browser privacy settings block it. No Gmail password or client secret is stored here.
         The OAuth client must allow this site's GitHub Pages origin in <b>Authorized JavaScript origins</b>.
         Live sending uses the <b>gmail.send</b> permission and sends as the Google account that authorizes the app.
       </div>
@@ -284,19 +285,24 @@ function persist(){
 function restore(){
   try{
     const x=JSON.parse(localStorage.getItem(STORAGE_KEY)||"null");
-    if(!x)return;
-    state.sender=x.sender||state.sender;
-    state.queue=Array.isArray(x.queue)?x.queue:[];
-    state.settings=Object.assign(state.settings,x.settings||{});
+    // Remember the OAuth client ID independently of the queue/state record.
+    $("googleClientId").value=localStorage.getItem("onlinechurch_google_client_id")||"";
+    if(x){
+      state.sender=x.sender||state.sender;
+      state.queue=Array.isArray(x.queue)?x.queue:[];
+      state.settings=Object.assign(state.settings,x.settings||{});
+      state.gmailAccount=x.gmailAccount||"";
+    }
+    // Access tokens are intentionally not persisted. Attempt silent OAuth on page load.
     state.gmailConnected=false;
-    state.gmailAccount=x.gmailAccount||"";
+    state.gmailAccessToken="";
     $("sender").value=state.gmailAccount||state.sender;
     $("delay").value=state.settings.delay;
     $("retries").value=state.settings.retries;
     $("backoff").value=state.settings.backoff;
     $("mode").value="live";
-    $("authState").textContent="Not connected";
-    $("googleClientId").value=localStorage.getItem("onlinechurch_google_client_id")||"";
+    const hasClient=!!$("googleClientId").value.trim();
+    $("authState").textContent=hasClient&&state.gmailAccount?"Restoring connection…":"Not connected";
     $("gmailAccount").textContent=state.gmailAccount||"Not connected";
   }catch(e){log("Local state could not be restored: "+e.message,"err")}
 }
@@ -642,76 +648,104 @@ function clearComposer(){
   log("Composer cleared.");
 }
 
+async function handleGoogleTokenResponse(response, silent=false){
+  if(response?.error){
+    state.gmailConnected=false;
+    state.gmailAccessToken="";
+    $("authState").textContent=silent?"Reconnect required":"Authorization failed";
+    $("gmailAccount").textContent=state.gmailAccount||"Not connected";
+    persist();
+    if(silent){
+      log("Google could not restore the session silently. Open Gmail and tap Connect Gmail once to authorize again.","info");
+    }else{
+      log(response.error_description||response.error||"Google authorization failed.","err");
+    }
+    render();
+    return;
+  }
+
+  state.gmailAccessToken=response?.access_token||"";
+  if(!state.gmailAccessToken){
+    $("authState").textContent="Reconnect required";
+    log("Google returned no access token. Connect Gmail again.","err");
+    return;
+  }
+
+  try{
+    const profileResponse=await fetch(
+      "https://openidconnect.googleapis.com/v1/userinfo",
+      {headers:{Authorization:"Bearer "+state.gmailAccessToken}}
+    );
+    if(!profileResponse.ok) throw new Error("Google account identity could not be read.");
+    const profile=await profileResponse.json();
+    state.gmailAccount=profile.email||state.gmailAccount||"";
+    state.sender=state.gmailAccount||state.sender;
+    state.gmailConnected=true;
+    $("gmailAccount").textContent=state.gmailAccount||"Connected Gmail";
+    $("authState").textContent="Connected";
+    $("sender").value=state.gmailAccount||$("sender").value;
+    persist();
+    render();
+    log((silent?"Gmail session restored: ":"Gmail connected: ")+(state.gmailAccount||"authorized account"),"ok");
+    autoStartIfReady();
+  }catch(e){
+    state.gmailConnected=false;
+    state.gmailAccessToken="";
+    $("authState").textContent="Reconnect required";
+    persist();
+    log("Gmail connection failed: "+e.message,"err");
+  }
+}
+
+function getGoogleOAuthClientId(){
+  return $("googleClientId").value.trim()||localStorage.getItem("onlinechurch_google_client_id")||"";
+}
+
+function attemptSilentGmailReconnect(tries=0){
+  const clientId=getGoogleOAuthClientId();
+  if(!clientId){
+    $("authState").textContent="Not connected";
+    return;
+  }
+  if(!window.google||!google.accounts||!google.accounts.oauth2){
+    if(tries<40){setTimeout(()=>attemptSilentGmailReconnect(tries+1),250);return;}
+    $("authState").textContent="Reconnect required";
+    log("Google sign-in library did not load. Check your connection and reload.","err");
+    return;
+  }
+  // Do not prompt on every reload. Google may still require a manual reconnect
+  // if the grant expired, was revoked, or browser privacy settings block silent auth.
+  state.gmailTokenClient=google.accounts.oauth2.initTokenClient({
+    client_id:clientId,
+    scope:"https://www.googleapis.com/auth/gmail.send openid email",
+    callback:(response)=>handleGoogleTokenResponse(response,true)
+  });
+  try{
+    state.gmailTokenClient.requestAccessToken({prompt:"none"});
+  }catch(e){
+    $("authState").textContent="Reconnect required";
+    log("Silent Gmail reconnect could not start: "+(e.message||String(e)),"err");
+  }
+}
+
 function connectGmail(){
   loadProfilePicture();
-
-  const clientId=$("googleClientId").value.trim()||
-    localStorage.getItem("onlinechurch_google_client_id")||"";
-
+  const clientId=getGoogleOAuthClientId();
   if(!clientId){
     log("Enter the Google OAuth Web Client ID first.","err");
     $("googleClientId").focus();
     return;
   }
-
   if(!window.google||!google.accounts||!google.accounts.oauth2){
     log("Google Identity Services is still loading. Try again in a moment.","err");
     return;
   }
-
   localStorage.setItem("onlinechurch_google_client_id",clientId);
-
   state.gmailTokenClient=google.accounts.oauth2.initTokenClient({
     client_id:clientId,
     scope:"https://www.googleapis.com/auth/gmail.send openid email",
-    callback:async(response)=>{
-      if(response?.error){
-        state.gmailConnected=false;
-        state.gmailAccessToken="";
-        $("authState").textContent="Authorization failed";
-        persist();
-        log(response.error_description||response.error||"Google authorization failed.","err");
-        return;
-      }
-
-      state.gmailAccessToken=response.access_token||"";
-      if(!state.gmailAccessToken){
-        log("Google returned no access token.","err");
-        return;
-      }
-
-      try{
-        const profileResponse=await fetch(
-          "https://openidconnect.googleapis.com/v1/userinfo",
-          {headers:{Authorization:"Bearer "+state.gmailAccessToken}}
-        );
-        if(!profileResponse.ok){
-          throw new Error("Google account identity could not be read.");
-        }
-        const profile=await profileResponse.json();
-
-        state.gmailAccount=profile.email||"";
-        state.sender=state.gmailAccount||state.sender;
-        state.gmailConnected=true;
-
-        $("gmailAccount").textContent=state.gmailAccount||"Connected Gmail";
-        $("authState").textContent="Connected";
-        $("sender").value=state.gmailAccount||$("sender").value;
-
-        persist();
-        render();
-        log(`Gmail connected: ${state.gmailAccount||"authorized account"}`,"ok");
-        autoStartIfReady();
-      }catch(e){
-        state.gmailConnected=false;
-        state.gmailAccessToken="";
-        $("authState").textContent="Connection failed";
-        persist();
-        log("Gmail connection failed: "+e.message,"err");
-      }
-    }
+    callback:(response)=>handleGoogleTokenResponse(response,false)
   });
-
   $("authState").textContent="Waiting for Google authorization…";
   log("Opening Google authorization…","info");
   state.gmailTokenClient.requestAccessToken({prompt:"consent"});
@@ -818,6 +852,8 @@ window.addEventListener("beforeunload",persist);
 restore();render();loadProfilePicture();
 log("OnlineChurch Mail Engine initialized.");
 runDiagnostics();
+// Restore the remembered Gmail session when Google allows silent authorization.
+attemptSilentGmailReconnect();
 </script>
 </body>
 </html>
