@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>OnlineChurch Mail Engine</title>
+<style>
+:root{
+  --bg:#f4faf6;--panel:#ffffff;--panel2:#f7fcf8;--line:#d8e8dc;
+  --text:#17301f;--muted:#64786a;--accent:#159447;--good:#159447;
+  --warn:#b77900;--bad:#c9363e;--shadow:0 12px 32px rgba(21,148,71,.10);
+}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(180deg,#ffffff 0%,#f3faf5 100%);
+font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text)}
+button,input,textarea,select{font:inherit}
+button{cursor:pointer}
+.wrap{max-width:1380px;margin:auto;padding:22px}
+header{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px}
+.brand{display:flex;gap:13px;align-items:center}
+.logo{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,#159447,#38b866);display:grid;place-items:center;font-weight:900;box-shadow:0 8px 25px #0005}
+h1{font-size:21px;margin:0}.sub{font-size:12px;color:var(--muted);margin-top:3px}
+.status{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:#ffffff;padding:9px 12px;border-radius:999px;font-size:12px}
+.dot{width:8px;height:8px;border-radius:50%;background:#718096}.dot.good{background:var(--good);box-shadow:0 0 12px var(--good)}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:15px}
+.card{background:linear-gradient(180deg,#ffffff,#f9fdf9);border:1px solid var(--line);border-radius:15px;box-shadow:var(--shadow)}
+.stat{padding:17px}.stat .n{font-size:26px;font-weight:800}.stat .l{color:var(--muted);font-size:12px;margin-top:4px}
+.layout{display:grid;grid-template-columns:1.05fr 1fr;gap:15px}
+.card h2{font-size:14px;margin:0;padding:15px 17px;border-bottom:1px solid var(--line)}
+.body{padding:16px}
+label{display:block;color:#b9c7da;font-size:12px;font-weight:700;margin:0 0 6px}
+input,textarea,select{width:100%;background:#ffffff;border:1px solid #c9ddd0;color:var(--text);border-radius:9px;padding:10px 11px;outline:none}
+input:focus,textarea:focus,select:focus{border-color:#159447;box-shadow:0 0 0 3px #15944718}
+textarea{min-height:145px;resize:vertical}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.btn{border:1px solid #c9ddd0;background:#ffffff;color:#17301f;border-radius:9px;padding:9px 12px;font-weight:700;font-size:12px}
+.btn.primary{background:#159447;border-color:#159447;color:#ffffff}.btn.good{background:#159447;border-color:#159447;color:#ffffff}
+.btn.warn{background:#fff5d9;border-color:#e1bd67;color:#765300}.btn.bad{background:#fff0f1;border-color:#df8990;color:#a42630}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.note{font-size:11px;color:var(--muted);line-height:1.55;margin-top:9px}
+.tabs{display:flex;gap:6px;padding:10px;border-bottom:1px solid var(--line);background:#fbfefb}
+.tab{background:transparent;border:1px solid transparent;color:var(--muted);padding:8px 11px;border-radius:8px;font-weight:700;font-size:12px}
+.tab.active{background:#e7f6ec;border-color:#9dd5ad;color:#11723a}
+.view{display:none}.view.active{display:block}
+.queue{max-height:450px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:11px}
+th,td{text-align:left;padding:9px 8px;border-bottom:1px solid #1a2a41;vertical-align:top}
+th{color:#587060;position:sticky;top:0;background:#f1f8f3}
+.badge{display:inline-flex;border-radius:999px;padding:4px 7px;font-weight:800;font-size:10px}
+.pending{background:#edf2ef;color:#607268}.sending{background:#e4f3ea;color:#16733b}
+.sent{background:#dcf5e5;color:#13713a}.failed{background:#fde6e8;color:#a52c35}
+.dry{background:#fff3d2;color:#856100}.paused{background:#fff3d2;color:#856100}
+.log{background:#f7fbf8;border:1px solid #d8e8dc;border-radius:9px;padding:10px;height:250px;overflow:auto;font-family:ui-monospace,monospace;font-size:10px;line-height:1.6}
+.log .ok{color:#5ce0ad}.log .err{color:#ff808b}.log .info{color:#91bfff}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:7px;font-size:12px}
+.kv div:nth-child(odd){color:#587060}
+.check{display:flex;align-items:center;gap:8px;color:#587060;font-size:12px;margin-top:10px}.check input{width:auto}
+footer{padding:18px 0;color:#718278;font-size:10px;text-align:center}
+@media(max-width:1000px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}}
+@media(max-width:600px){.wrap{padding:12px}.grid{grid-template-columns:1fr 1fr}.row{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="brand">
+    <div class="logo">✉</div>
+    <div><h1>OnlineChurch Mail Engine</h1><div class="sub">Single-file Gmail delivery console · one recipient at a time</div></div>
+  </div>
+  <div class="status"><span id="statusDot" class="dot"></span><span id="engineStatus">ENGINE STOPPED</span></div>
+</header>
+
+<div class="grid">
+  <div class="card stat"><div class="n" id="pendingCount">0</div><div class="l">PENDING</div></div>
+  <div class="card stat"><div class="n" id="sentCount">0</div><div class="l">SENT</div></div>
+  <div class="card stat"><div class="n" id="failedCount">0</div><div class="l">FAILED</div></div>
+  <div class="card stat"><div class="n" id="successRate">—</div><div class="l">SUCCESS RATE</div></div>
+</div>
+
+<div class="card" style="margin-bottom:15px">
+  <div class="tabs">
+    <button class="tab active" data-tab="compose">Composer</button>
+    <button class="tab" data-tab="recipients">Recipients</button>
+    <button class="tab" data-tab="engine">Engine</button>
+    <button class="tab" data-tab="gmail">Gmail</button>
+    <button class="tab" data-tab="diagnostics">Diagnostics</button>
+  </div>
+
+  <div id="compose" class="view active">
+    <div class="body">
+      <div class="row">
+        <div><label>FROM</label><input id="sender" value="onlinechurch@gmail.com"></div>
+        <div><label>SUBJECT</label><input id="subject" value="Hello {name}"></div>
+      </div>
+      <div style="margin-top:10px">
+        <label>MESSAGE</label>
+        <textarea id="body">Hello {name},
+
+This is a message from OnlineChurch.
+
+Best regards</textarea>
+      </div>
+      <div class="actions">
+        <button class="btn" onclick="saveDraft()">Save Draft</button>
+        <button class="btn" onclick="previewMessage()">Preview</button>
+        <button class="btn" onclick="clearComposer()">Clear</button>
+      </div>
+      <div class="note"><b>{name}</b> is replaced with each recipient's name. The engine does not modify message content to evade spam filtering.</div>
+    </div>
+  </div>
+
+  <div id="recipients" class="view">
+    <div class="body">
+      <div class="row">
+        <div><label>EMAIL</label><input id="rEmail" placeholder="person@example.com"></div>
+        <div><label>NAME</label><input id="rName" placeholder="John"></div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" onclick="addRecipient()">Add Recipient</button>
+        <button class="btn" onclick="document.getElementById('csvInput').click()">Import CSV</button>
+        <button class="btn" onclick="exportCSV()">Export Results</button>
+        <button class="btn bad" onclick="clearQueue()">Clear Queue</button>
+        <input id="csvInput" type="file" accept=".csv,text/csv" style="display:none" onchange="importCSV(event)">
+      </div>
+      <div class="note">CSV format: <b>email,name</b>. Only addresses you are permitted to contact should be loaded.</div>
+      <div class="queue" style="margin-top:13px">
+        <table><thead><tr><th>#</th><th>Recipient</th><th>Status</th><th>Attempts</th><th>Result</th></tr></thead>
+        <tbody id="queueBody"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <div id="engine" class="view">
+    <div class="body">
+      <div class="row">
+        <div><label>DELAY BETWEEN RECIPIENTS (SECONDS)</label><input id="delay" type="number" min="0" value="30"></div>
+        <div><label>MAX RETRIES</label><input id="retries" type="number" min="1" value="3"></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div><label>RETRY BACKOFF (SECONDS)</label><input id="backoff" type="number" min="1" value="60"></div>
+        <div><label>MODE</label><select id="mode"><option value="dry">DRY RUN</option><option value="live">LIVE GMAIL</option></select></div>
+      </div>
+      <div class="actions">
+        <button id="startBtn" class="btn good" onclick="startEngine()">▶ START ENGINE</button>
+        <button id="stopBtn" class="btn bad" onclick="stopEngine()" disabled>■ STOP</button>
+        <button class="btn warn" onclick="resetFailed()">Reset Failed</button>
+      </div>
+      <div class="note">Dry Run processes the queue without contacting Gmail. Live mode requires a supported Gmail OAuth connection; this page never asks for or stores your Gmail password.</div>
+      <div style="margin-top:14px"><label>ENGINE LOG</label><div id="log" class="log"></div></div>
+    </div>
+  </div>
+
+  <div id="gmail" class="view">
+    <div class="body">
+      <div class="kv">
+        <div>Account</div><div id="gmailAccount">onlinechurch@gmail.com</div>
+        <div>Authorization</div><div id="authState">Not connected</div>
+        <div>API</div><div>Gmail API / OAuth 2.0</div>
+        <div>Transport</div><div>Browser → Gmail API</div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" onclick="connectGmail()">Connect Gmail</button>
+        <button class="btn" onclick="disconnectGmail()">Disconnect</button>
+      </div>
+      <div class="note">
+        A pure standalone HTML file cannot safely contain a Google client secret or pretend to be a Gmail SMTP server.
+        This console therefore keeps authentication as a separate OAuth step. For production, use Google's supported OAuth flow and Gmail API, or pair this UI with a tiny backend that holds OAuth credentials securely.
+      </div>
+    </div>
+  </div>
+
+  <div id="diagnostics" class="view">
+    <div class="body">
+      <div class="actions">
+        <button class="btn primary" onclick="runDiagnostics()">Run Diagnostics</button>
+      </div>
+      <div id="diagOutput" class="log" style="margin-top:12px"></div>
+      <div class="note">Diagnostics check the local engine state. They cannot guarantee inbox placement because the recipient's provider makes the final filtering decision.</div>
+    </div>
+  </div>
+</div>
+
+<footer>OnlineChurch Mail Engine · Legitimate delivery workflow · Inbox placement cannot be guaranteed</footer>
+</div>
+
+<script>
+"use strict";
+
+const STORAGE_KEY = "onlinechurch_mail_engine_v1";
+
+const state = {
+  version: 1,
+  sender: "onlinechurch@gmail.com",
+  queue: [],
+  running: false,
+  stopRequested: false,
+  gmailConnected: false,
+  logs: [],
+  settings: {delay:30,retries:3,backoff:60,mode:"dry"}
+};
+
+function $(id){return document.getElementById(id)}
+
+function log(message,type="info"){
+  const time = new Date().toLocaleTimeString();
+  state.logs.push({time,message,type});
+  if(state.logs.length>500) state.logs.shift();
+  const el=$("log");
+  el.innerHTML=state.logs.map(x=>`<div class="${x.type}">[${x.time}] ${escapeHtml(x.message)}</div>`).join("");
+  el.scrollTop=el.scrollHeight;
+}
+
+function escapeHtml(s){
+  return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
+}
+
+function persist(){
+  localStorage.setItem(STORAGE_KEY,JSON.stringify({
+    version:state.version,sender:state.sender,queue:state.queue,
+    settings:state.settings,gmailConnected:state.gmailConnected
+  }));
+}
+
+function restore(){
+  try{
+    const x=JSON.parse(localStorage.getItem(STORAGE_KEY)||"null");
+    if(!x)return;
+    state.sender=x.sender||state.sender;
+    state.queue=Array.isArray(x.queue)?x.queue:[];
+    state.settings=Object.assign(state.settings,x.settings||{});
+    state.gmailConnected=!!x.gmailConnected;
+    $("sender").value=state.sender;
+    $("delay").value=state.settings.delay;
+    $("retries").value=state.settings.retries;
+    $("backoff").value=state.settings.backoff;
+    $("mode").value=state.settings.mode;
+    $("authState").textContent=state.gmailConnected?"Connected":"Not connected";
+  }catch(e){log("Local state could not be restored: "+e.message,"err")}
+}
+
+function addRecipient(){
+  const email=$("rEmail").value.trim();
+  const name=$("rName").value.trim();
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){
+    log("Rejected invalid recipient address.","err"); return;
+  }
+  if(state.queue.some(r=>r.email.toLowerCase()===email.toLowerCase() && r.status==="pending")){
+    log("Recipient already exists in the pending queue.","err"); return;
+  }
+  state.queue.push({
+    id:crypto.randomUUID(),
+    email,name,status:"pending",attempts:0,messageId:"",error:"",
+    createdAt:new Date().toISOString()
+  });
+  $("rEmail").value="";$("rName").value="";
+  persist();render();log("Added recipient: "+email);
+}
+
+function importCSV(ev){
+  const file=ev.target.files[0]; if(!file)return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    const lines=String(reader.result).split(/\r?\n/).filter(Boolean);
+    if(!lines.length)return;
+    const headers=parseCSVLine(lines[0]).map(x=>x.trim().toLowerCase());
+    const ei=headers.indexOf("email"), ni=headers.indexOf("name");
+    if(ei<0){log("CSV must contain an email column.","err");return}
+    let added=0;
+    for(let i=1;i<lines.length;i++){
+      const c=parseCSVLine(lines[i]),email=(c[ei]||"").trim(),name=ni>=0?(c[ni]||"").trim():"";
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))continue;
+      state.queue.push({id:crypto.randomUUID(),email,name,status:"pending",attempts:0,messageId:"",error:"",createdAt:new Date().toISOString()});
+      added++;
+    }
+    persist();render();log(`Imported ${added} recipient(s).`);
+  };
+  reader.readAsText(file);ev.target.value="";
+}
+
+function parseCSVLine(line){
+  const out=[];let cur="",quoted=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch==='"'){
+      if(quoted && line[i+1]==='"'){cur+='"';i++} else quoted=!quoted;
+    }else if(ch===","&&!quoted){out.push(cur);cur=""}else cur+=ch;
+  }
+  out.push(cur);return out;
+}
+
+function exportCSV(){
+  const rows=[["email","name","status","attempts","message_id","error"]];
+  state.queue.forEach(r=>rows.push([r.email,r.name,r.status,r.attempts,r.messageId,r.error]));
+  const csv=rows.map(r=>r.map(csvCell).join(",")).join("\n");
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download="onlinechurch-mail-results.csv";a.click();URL.revokeObjectURL(a.href);
+  log("Exported queue results.");
+}
+function csvCell(x){return `"${String(x??"").replace(/"/g,'""')}"`}
+
+function render(){
+  const q=$("queueBody");
+  q.innerHTML=state.queue.map((r,i)=>{
+    const cls=r.status==="sent"?"sent":r.status==="failed"?"failed":r.status==="sending"?"sending":r.status==="dry_run"?"dry":"pending";
+    return `<tr>
+      <td>${i+1}</td><td><b>${escapeHtml(r.email)}</b><br><span class="note">${escapeHtml(r.name)}</span></td>
+      <td><span class="badge ${cls}">${escapeHtml(r.status)}</span></td>
+      <td>${r.attempts}</td><td>${escapeHtml(r.messageId||r.error||"—")}</td>
+    </tr>`;
+  }).join("");
+  const pending=state.queue.filter(r=>r.status==="pending").length;
+  const sent=state.queue.filter(r=>r.status==="sent").length;
+  const failed=state.queue.filter(r=>r.status==="failed").length;
+  const finished=sent+failed;
+  $("pendingCount").textContent=pending;
+  $("sentCount").textContent=sent;
+  $("failedCount").textContent=failed;
+  $("successRate").textContent=finished?Math.round(sent/finished*100)+"%":"—";
+  $("engineStatus").textContent=state.running?"ENGINE RUNNING":"ENGINE STOPPED";
+  $("statusDot").className="dot"+(state.running?" good":"");
+}
+
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+
+function getMessageFor(r){
+  const name=r.name||"";
+  return {
+    subject:$("subject").value.replaceAll("{name}",name),
+    body:$("body").value.replaceAll("{name}",name)
+  };
+}
+
+async function startEngine(){
+  if(state.running)return;
+  state.sender=$("sender").value.trim()||"onlinechurch@gmail.com";
+  state.settings.delay=Math.max(0,Number($("delay").value)||0);
+  state.settings.retries=Math.max(1,Number($("retries").value)||1);
+  state.settings.backoff=Math.max(1,Number($("backoff").value)||1);
+  state.settings.mode=$("mode").value;
+  persist();
+
+  const pending=state.queue.filter(r=>r.status==="pending");
+  if(!pending.length){log("No pending recipients.","err");return}
+
+  if(state.settings.mode==="live" && !state.gmailConnected){
+    log("Live mode requires Gmail OAuth connection. Connect Gmail first.","err");
+    return;
+  }
+
+  state.running=true;state.stopRequested=false;
+  $("startBtn").disabled=true;$("stopBtn").disabled=false;render();
+  log(`Engine started in ${state.settings.mode.toUpperCase()} mode.`,"info");
+
+  try{
+    for(const r of state.queue){
+      if(state.stopRequested)break;
+      if(r.status!=="pending")continue;
+
+      r.status="sending";r.attempts=0;r.error="";
+      render();persist();
+      const msg=getMessageFor(r);
+
+      if(state.settings.mode==="dry"){
+        await sleep(250);
+        r.status="dry_run";
+        log(`DRY RUN: ${r.email} — no message sent.`,"ok");
+      }else{
+        let success=false;
+        for(let attempt=1;attempt<=state.settings.retries;attempt++){
+          if(state.stopRequested)break;
+          r.attempts=attempt;render();
+          try{
+            /*
+             * IMPORTANT:
+             * This standalone file does not contain a Google client secret.
+             * A production live adapter should call a backend endpoint or
+             * a properly configured browser OAuth flow here.
+             */
+            const result=await sendViaConfiguredAdapter(r,msg);
+            if(result.ok){
+              r.status="sent";r.messageId=result.messageId||"accepted";
+              log(`ACCEPTED BY MAIL TRANSPORT: ${r.email}`,"ok");
+              success=true;break;
+            }
+            throw new Error(result.error||"Mail transport rejected request");
+          }catch(e){
+            r.error=e.message||String(e);
+            log(`Attempt ${attempt} failed for ${r.email}: ${r.error}`,"err");
+            if(attempt<state.settings.retries)await sleep(state.settings.backoff*1000*attempt);
+          }
+        }
+        if(!success && !state.stopRequested)r.status="failed";
+      }
+
+      persist();render();
+      if(state.stopRequested)break;
+      if(state.queue.some(x=>x.status==="pending"))await sleep(state.settings.delay*1000);
+    }
+  }finally{
+    state.running=false;
+    $("startBtn").disabled=false;$("stopBtn").disabled=true;
+    persist();render();
+    log(state.stopRequested?"Engine stopped by user.":"Queue processing finished.","info");
+    state.stopRequested=false;
+  }
+}
+
+async function sendViaConfiguredAdapter(recipient,message){
+  /*
+    This is intentionally a safe boundary.
+
+    The HTML engine cannot contain a Gmail OAuth client secret.
+    Connect this function to your own OAuth/backend adapter when you
+    enable live sending.
+
+    Dry-run mode is fully functional without a backend.
+  */
+  if(!state.gmailConnected){
+    return {ok:false,error:"Gmail is not connected."};
+  }
+  return {
+    ok:false,
+    error:"No live Gmail transport adapter is configured in this standalone HTML file."
+  };
+}
+
+function stopEngine(){
+  if(!state.running)return;
+  state.stopRequested=true;
+  log("Stop requested; current operation will finish.","info");
+}
+
+function resetFailed(){
+  let n=0;
+  state.queue.forEach(r=>{if(r.status==="failed"||r.status==="dry_run"){r.status="pending";r.attempts=0;r.error="";r.messageId="";n++}});
+  persist();render();log(`Reset ${n} recipient(s) to pending.`);
+}
+
+function clearQueue(){
+  if(state.running){log("Stop the engine before clearing the queue.","err");return}
+  if(!confirm("Clear the entire recipient queue?"))return;
+  state.queue=[];persist();render();log("Queue cleared.");
+}
+
+function saveDraft(){
+  state.sender=$("sender").value;
+  state.settings.delay=Number($("delay").value)||30;
+  state.settings.retries=Number($("retries").value)||3;
+  state.settings.backoff=Number($("backoff").value)||60;
+  persist();log("Draft/settings saved locally.");
+}
+
+function previewMessage(){
+  const r=state.queue.find(x=>x.status==="pending")||{name:"Recipient"};
+  const m=getMessageFor(r);
+  alert("SUBJECT\n\n"+m.subject+"\n\nMESSAGE\n\n"+m.body);
+}
+
+function clearComposer(){
+  $("subject").value="";$("body").value="";
+  log("Composer cleared.");
+}
+
+function connectGmail(){
+  /*
+    A real Google OAuth flow needs a client ID configured for the
+    authorized origin. This UI deliberately does not ask for a Gmail
+    password or store credentials.
+  */
+  const clientId=prompt("Enter your Google OAuth Web Client ID (not your Gmail password).");
+  if(!clientId){
+    log("Gmail connection cancelled.","err");return;
+  }
+  localStorage.setItem("onlinechurch_google_client_id",clientId);
+  state.gmailConnected=true;
+  $("authState").textContent="OAuth configuration recorded locally";
+  persist();
+  log("Google OAuth client ID recorded. A production OAuth adapter still needs to complete authorization.","info");
+}
+
+function disconnectGmail(){
+  state.gmailConnected=false;
+  localStorage.removeItem("onlinechurch_google_client_id");
+  $("authState").textContent="Not connected";
+  persist();log("Gmail connection cleared.");
+}
+
+function runDiagnostics(){
+  const tests=[];
+  tests.push(["Browser",!!window.localStorage]);
+  tests.push(["Local storage",!!localStorage]);
+  tests.push(["Crypto UUID",!!(crypto&&crypto.randomUUID)]);
+  tests.push(["Queue loaded",Array.isArray(state.queue)]);
+  tests.push(["Sender configured",/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test($("sender").value)]);
+  tests.push(["Gmail OAuth adapter","UI only — backend/API adapter required for live Gmail sending"]);
+  tests.push(["Inbox placement","Provider-controlled; cannot be guaranteed"]);
+  $("diagOutput").innerHTML=tests.map(t=>`<div class="${t[1]===true?"ok":"info"}">[${t[0]}] ${t[1]===true?"PASS":t[1]===false?"FAIL":escapeHtml(t[1])}</div>`).join("");
+  log("Diagnostics completed.");
+}
+
+document.querySelectorAll(".tab").forEach(btn=>{
+  btn.addEventListener("click",()=>{
+    document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+    document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));
+    btn.classList.add("active");$(btn.dataset.tab).classList.add("active");
+  });
+});
+
+window.addEventListener("beforeunload",persist);
+
+restore();render();
+log("OnlineChurch Mail Engine initialized.");
+runDiagnostics();
+</script>
+</body>
+</html>
