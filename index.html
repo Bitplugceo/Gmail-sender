@@ -1,4 +1,3 @@
-S
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -80,7 +79,7 @@ footer{padding:18px 0;color:#718278;font-size:10px;text-align:center}
     <div class="logo">✉</div>
     <div><h1>OnlineChurch Mail Engine</h1><div class="sub">Single-file Gmail delivery console · one recipient at a time</div></div>
   </div>
-  <div class="status"><span id="statusDot" class="dot"></span><span id="engineStatus">ENGINE STOPPED</span></div>
+  <div class="status"><span id="statusDot" class="dot"></span><span id="engineStatus">ENGINE READY</span></div>
 </header>
 
 <div class="grid">
@@ -647,7 +646,7 @@ function connectGmail(){
 
   state.gmailTokenClient=google.accounts.oauth2.initTokenClient({
     client_id:clientId,
-    scope:"https://www.googleapis.com/auth/gmail.send",
+    scope:"https://www.googleapis.com/auth/gmail.send openid email",
     callback:async(response)=>{
       if(response?.error){
         state.gmailConnected=false;
@@ -665,13 +664,16 @@ function connectGmail(){
       }
 
       try{
-        const profileResponse=await gmailFetch(
-          "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-          {method:"GET"}
+        const profileResponse=await fetch(
+          "https://openidconnect.googleapis.com/v1/userinfo",
+          {headers:{Authorization:"Bearer "+state.gmailAccessToken}}
         );
+        if(!profileResponse.ok){
+          throw new Error("Google account identity could not be read.");
+        }
         const profile=await profileResponse.json();
 
-        state.gmailAccount=profile.emailAddress||"";
+        state.gmailAccount=profile.email||"";
         state.sender=state.gmailAccount||state.sender;
         state.gmailConnected=true;
 
