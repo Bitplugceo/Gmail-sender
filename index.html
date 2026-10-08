@@ -103,7 +103,10 @@ footer{padding:18px 0;color:#718278;font-size:10px;text-align:center}
     <div class="body">
       <div class="row">
         <div><label>FROM</label><input id="sender" value="onlinechurch@gmail.com" readonly></div>
-        <div><label>SUBJECT</label><input id="subject" value="Hello {name}"></div>
+        <div><label>TO</label><input id="composerTo" type="email" placeholder="recipient@example.com" autocomplete="email"></div>
+      </div>
+      <div style="margin-top:10px">
+        <label>SUBJECT</label><input id="subject" value="Hello {name}">
       </div>
       <div style="margin-top:10px">
         <label>MESSAGE</label>
@@ -114,11 +117,10 @@ This is a message from OnlineChurch.
 Best regards</textarea>
       </div>
       <div class="actions">
-        <button class="btn" onclick="saveDraft()">Save Draft</button>
-        <button class="btn" onclick="previewMessage()">Preview</button>
+        <button class="btn primary" onclick="addComposerRecipient()">Add To Queue</button>
         <button class="btn" onclick="clearComposer()">Clear</button>
       </div>
-      <div class="note"><b>{name}</b> is replaced with each recipient's name. The engine does not modify message content to evade spam filtering.</div>
+      <div class="note"><b>TO</b> adds a single recipient to the delivery queue. For named recipients and bulk lists, use the Recipients tab. <b>{name}</b> is replaced with each recipient's name. The engine does not modify message content to evade spam filtering.</div>
     </div>
   </div>
 
@@ -297,6 +299,34 @@ function restore(){
     $("googleClientId").value=localStorage.getItem("onlinechurch_google_client_id")||"";
     $("gmailAccount").textContent=state.gmailAccount||"Not connected";
   }catch(e){log("Local state could not be restored: "+e.message,"err")}
+}
+
+function addComposerRecipient(){
+  const email=$("composerTo").value.trim();
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){
+    log("Enter a valid recipient email address in TO.","err");
+    $("composerTo").focus();
+    return;
+  }
+  if(state.queue.some(r=>r.email.toLowerCase()===email.toLowerCase() && r.status==="pending")){
+    log("Recipient is already in the pending queue.","err");
+    return;
+  }
+  state.queue.push({
+    id:crypto.randomUUID(),
+    email,
+    name:"",
+    status:"pending",
+    attempts:0,
+    messageId:"",
+    error:"",
+    createdAt:new Date().toISOString()
+  });
+  $("composerTo").value="";
+  persist();
+  render();
+  log("Added recipient: "+email);
+  autoStartIfReady();
 }
 
 function addRecipient(){
@@ -605,23 +635,10 @@ function clearQueue(){
   state.queue=[];persist();render();log("Queue cleared.");
 }
 
-function saveDraft(){
-  state.sender=$("sender").value;
-  loadProfilePicture();
-  state.settings.delay=Number($("delay").value)||30;
-  state.settings.retries=Number($("retries").value)||3;
-  state.settings.backoff=Number($("backoff").value)||60;
-  persist();log("Draft/settings saved locally.");
-}
-
-function previewMessage(){
-  const r=state.queue.find(x=>x.status==="pending")||{name:"Recipient"};
-  const m=getMessageFor(r);
-  alert("SUBJECT\n\n"+m.subject+"\n\nMESSAGE\n\n"+m.body);
-}
-
 function clearComposer(){
-  $("subject").value="";$("body").value="";
+  $("composerTo").value="";
+  $("subject").value="";
+  $("body").value="";
   log("Composer cleared.");
 }
 
