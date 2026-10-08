@@ -1,4 +1,3 @@
-S
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -71,6 +70,9 @@ footer{padding:18px 0;color:#718278;font-size:10px;text-align:center}
 
 @media(max-width:1000px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}}
 @media(max-width:600px){.wrap{padding:12px}.grid{grid-template-columns:1fr 1fr}.row{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}}
+
+/* Simplified manual-send screen: hide legacy dashboard counters/status. */
+.status,.grid{display:none!important}
 </style>
 </head>
 <body>
@@ -78,7 +80,7 @@ footer{padding:18px 0;color:#718278;font-size:10px;text-align:center}
 <header>
   <div class="brand">
     <div class="logo">✉</div>
-    <div><h1>OnlineChurch Mail Engine</h1><div class="sub">Single-file Gmail delivery console · one recipient at a time</div></div>
+    <div><h1>OnlineChurch Mail Engine</h1><div class="sub">Gmail connected · simple email sender</div></div>
   </div>
   <div class="status"><span id="statusDot" class="dot"></span><span id="engineStatus">ENGINE READY</span></div>
 </header>
@@ -121,7 +123,7 @@ Best regards</textarea>
         <button class="btn primary" onclick="addComposerRecipient()">Send</button>
         <button class="btn" onclick="clearComposer()">Clear</button>
       </div>
-      <div class="note"><b>TO</b> adds a single recipient to the delivery queue. For named recipients and bulk lists, use the Recipients tab. <b>{name}</b> is replaced with each recipient's name. The engine does not modify message content to evade spam filtering.</div>
+      <div class="note">Enter the recipient, subject, and message, then press <b>SEND</b>. The connected Gmail account sends the message. Use <b>{name}</b> when sending personalized messages from the Recipients tab.</div>
     </div>
   </div>
 
@@ -407,12 +409,12 @@ function render(){
   const sent=state.queue.filter(r=>r.status==="sent").length;
   const failed=state.queue.filter(r=>r.status==="failed").length;
   const finished=sent+failed;
-  $("pendingCount").textContent=pending;
-  $("sentCount").textContent=sent;
-  $("failedCount").textContent=failed;
-  $("successRate").textContent=finished?Math.round(sent/finished*100)+"%":"—";
-  $("engineStatus").textContent=state.running?"ENGINE RUNNING":"ENGINE STOPPED";
-  $("statusDot").className="dot"+(state.running?" good":"");
+  if($("pendingCount")) $("pendingCount").textContent=pending;
+  if($("sentCount")) $("sentCount").textContent=sent;
+  if($("failedCount")) $("failedCount").textContent=failed;
+  if($("successRate")) $("successRate").textContent=finished?Math.round(sent/finished*100)+"%":"—";
+  if($("engineStatus")) $("engineStatus").textContent=state.running?"ENGINE RUNNING":"ENGINE STOPPED";
+  if($("statusDot")) $("statusDot").className="dot"+(state.running?" good":"");
 }
 
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
