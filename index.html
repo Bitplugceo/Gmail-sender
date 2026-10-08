@@ -1,48 +1,76 @@
+S
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>OnlineChurch Mail Engine</title>
 <style>
 :root{
-  --bg:#f4faf6;--panel:#fff;--line:#d8e8dc;--text:#17301f;--muted:#64786a;
-  --accent:#159447;--good:#159447;--warn:#b77900;--bad:#c9363e;
-  --shadow:0 12px 32px rgba(21,148,71,.10)
+  --bg:#f4faf6;--panel:#ffffff;--panel2:#f7fcf8;--line:#d8e8dc;
+  --text:#17301f;--muted:#64786a;--accent:#159447;--good:#159447;
+  --warn:#b77900;--bad:#c9363e;--shadow:0 12px 32px rgba(21,148,71,.10);
 }
 *{box-sizing:border-box}
-body{margin:0;background:linear-gradient(180deg,#fff 0%,#f3faf5 100%);
+body{margin:0;background:linear-gradient(180deg,#ffffff 0%,#f3faf5 100%);
 font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text)}
-button,input,textarea,select{font:inherit}button{cursor:pointer}
-.wrap{max-width:1180px;margin:auto;padding:18px}
-header{display:flex;justify-content:space-between;gap:14px;align-items:center;margin-bottom:15px}
-.brand{display:flex;gap:12px;align-items:center}.logo{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,#159447,#38b866);display:grid;place-items:center;color:#fff;font-weight:900;font-size:22px;box-shadow:0 8px 25px #0003}
+button,input,textarea,select{font:inherit}
+button{cursor:pointer}
+.wrap{max-width:1380px;margin:auto;padding:22px}
+header{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px}
+.brand{display:flex;gap:13px;align-items:center}
+.logo{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,#159447,#38b866);display:grid;place-items:center;font-weight:900;box-shadow:0 8px 25px #0005}
 h1{font-size:21px;margin:0}.sub{font-size:12px;color:var(--muted);margin-top:3px}
-.status{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;padding:9px 12px;border-radius:999px;font-size:12px;white-space:nowrap}
+.status{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:#ffffff;padding:9px 12px;border-radius:999px;font-size:12px}
 .dot{width:8px;height:8px;border-radius:50%;background:#718096}.dot.good{background:var(--good);box-shadow:0 0 12px var(--good)}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:15px}.card{background:linear-gradient(180deg,#fff,#f9fdf9);border:1px solid var(--line);border-radius:15px;box-shadow:var(--shadow)}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:15px}
+.card{background:linear-gradient(180deg,#ffffff,#f9fdf9);border:1px solid var(--line);border-radius:15px;box-shadow:var(--shadow)}
 .stat{padding:17px}.stat .n{font-size:26px;font-weight:800}.stat .l{color:var(--muted);font-size:12px;margin-top:4px}
-.tabs{display:flex;gap:5px;padding:9px;overflow:auto;border-bottom:1px solid var(--line);background:#fbfefb}.tab{background:transparent;border:1px solid transparent;color:var(--muted);padding:9px 12px;border-radius:8px;font-weight:700;font-size:12px;white-space:nowrap}.tab.active{background:#e7f6ec;border-color:#9dd5ad;color:#11723a}
-.view{display:none}.view.active{display:block}.body{padding:16px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-label{display:block;color:#8ea3ba;font-size:12px;font-weight:800;margin:0 0 6px;text-transform:uppercase}
-input,textarea,select{width:100%;background:#fff;border:1px solid #c9ddd0;color:var(--text);border-radius:9px;padding:11px;outline:none}
+.layout{display:grid;grid-template-columns:1.05fr 1fr;gap:15px}
+.card h2{font-size:14px;margin:0;padding:15px 17px;border-bottom:1px solid var(--line)}
+.body{padding:16px}
+label{display:block;color:#b9c7da;font-size:12px;font-weight:700;margin:0 0 6px}
+input,textarea,select{width:100%;background:#ffffff;border:1px solid #c9ddd0;color:var(--text);border-radius:9px;padding:10px 11px;outline:none}
 input:focus,textarea:focus,select:focus{border-color:#159447;box-shadow:0 0 0 3px #15944718}
-textarea{min-height:160px;resize:vertical}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-.btn{border:1px solid #c9ddd0;background:#fff;color:#17301f;border-radius:9px;padding:10px 13px;font-weight:800;font-size:12px}.btn.primary,.btn.good{background:#159447;border-color:#159447;color:#fff}.btn.warn{background:#fff5d9;border-color:#e1bd67;color:#765300}.btn.bad{background:#fff0f1;border-color:#df8990;color:#a42630}.btn:disabled{opacity:.45;cursor:not-allowed}
-.note{font-size:11px;color:var(--muted);line-height:1.55;margin-top:9px}.queue{max-height:460px;overflow:auto}
-table{width:100%;border-collapse:collapse;font-size:11px}th,td{text-align:left;padding:9px 8px;border-bottom:1px solid #dbe8df;vertical-align:top}th{color:#587060;position:sticky;top:0;background:#f1f8f3}
-.badge{display:inline-flex;border-radius:999px;padding:4px 7px;font-weight:800;font-size:10px}.pending{background:#edf2ef;color:#607268}.sending{background:#e4f3ea;color:#16733b}.sent{background:#dcf5e5;color:#13713a}.failed{background:#fde6e8;color:#a52c35}.paused{background:#fff3d2;color:#856100}
-.log{background:#f7fbf8;border:1px solid #d8e8dc;border-radius:9px;padding:10px;height:240px;overflow:auto;font-family:ui-monospace,monospace;font-size:10px;line-height:1.6}.log .ok{color:#197a43}.log .err{color:#c9363e}.log .info{color:#4d7fc4}
-.kv{display:grid;grid-template-columns:150px 1fr;gap:8px;font-size:12px}.kv div:nth-child(odd){color:#587060}
-.callout{padding:13px;border:1px solid #bfe0c9;border-left:4px solid #159447;background:#f4faf6;border-radius:10px;font-size:11px;line-height:1.6;color:#4f6657}
-.danger{border-left-color:#c9363e;background:#fff7f7;border-color:#f0c7ca}.success{border-left-color:#159447}
-.profileBox{display:flex;align-items:center;gap:16px;padding:16px;border:1px solid #d8e8dc;background:#f7fcf8;border-radius:14px}.avatar{width:72px;height:72px;border-radius:50%;overflow:hidden;background:linear-gradient(135deg,#159447,#38b866);display:grid;place-items:center;color:#fff;font-size:23px;font-weight:900}.avatar img{width:100%;height:100%;object-fit:cover}
-.uploadBtn{display:inline-flex;align-items:center;background:#159447;color:#fff;border:1px solid #159447;border-radius:9px;padding:10px 12px;font-size:12px;font-weight:800}.uploadBtn input{display:none}
+textarea{min-height:145px;resize:vertical}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.btn{border:1px solid #c9ddd0;background:#ffffff;color:#17301f;border-radius:9px;padding:9px 12px;font-weight:700;font-size:12px}
+.btn.primary{background:#159447;border-color:#159447;color:#ffffff}.btn.good{background:#159447;border-color:#159447;color:#ffffff}
+.btn.warn{background:#fff5d9;border-color:#e1bd67;color:#765300}.btn.bad{background:#fff0f1;border-color:#df8990;color:#a42630}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.note{font-size:11px;color:var(--muted);line-height:1.55;margin-top:9px}
+.tabs{display:flex;gap:6px;padding:10px;border-bottom:1px solid var(--line);background:#fbfefb}
+.tab{background:transparent;border:1px solid transparent;color:var(--muted);padding:8px 11px;border-radius:8px;font-weight:700;font-size:12px}
+.tab.active{background:#e7f6ec;border-color:#9dd5ad;color:#11723a}
+.view{display:none}.view.active{display:block}
+.queue{max-height:450px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:11px}
+th,td{text-align:left;padding:9px 8px;border-bottom:1px solid #1a2a41;vertical-align:top}
+th{color:#587060;position:sticky;top:0;background:#f1f8f3}
+.badge{display:inline-flex;border-radius:999px;padding:4px 7px;font-weight:800;font-size:10px}
+.pending{background:#edf2ef;color:#607268}.sending{background:#e4f3ea;color:#16733b}
+.sent{background:#dcf5e5;color:#13713a}.failed{background:#fde6e8;color:#a52c35}
+.dry{background:#fff3d2;color:#856100}.paused{background:#fff3d2;color:#856100}
+.log{background:#f7fbf8;border:1px solid #d8e8dc;border-radius:9px;padding:10px;height:250px;overflow:auto;font-family:ui-monospace,monospace;font-size:10px;line-height:1.6}
+.log .ok{color:#5ce0ad}.log .err{color:#ff808b}.log .info{color:#91bfff}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:7px;font-size:12px}
+.kv div:nth-child(odd){color:#587060}
+.check{display:flex;align-items:center;gap:8px;color:#587060;font-size:12px;margin-top:10px}.check input{width:auto}
 footer{padding:18px 0;color:#718278;font-size:10px;text-align:center}
-.small{font-size:11px;color:var(--muted)}.hidden{display:none!important}
-.switch{display:flex;align-items:center;gap:9px;margin-top:12px;font-size:12px;color:#587060;font-weight:700}.switch input{width:auto}
-@media(max-width:800px){.grid{grid-template-columns:1fr 1fr}.row{grid-template-columns:1fr}}
-@media(max-width:600px){.wrap{padding:12px}.grid{grid-template-columns:1fr 1fr}header{align-items:flex-start;flex-direction:column}.status{align-self:flex-start}.kv{grid-template-columns:120px 1fr}}
+
+.profileBox{display:flex;align-items:center;gap:16px;padding:16px;border:1px solid #d8e8dc;background:#f7fcf8;border-radius:14px}
+.avatarWrap{flex:0 0 auto}
+.avatar{width:88px;height:88px;border-radius:50%;overflow:hidden;background:linear-gradient(135deg,#159447,#38b866);display:grid;place-items:center;color:#fff;font-size:27px;font-weight:900;border:4px solid #fff;box-shadow:0 5px 20px rgba(21,148,71,.18)}
+.avatar img{width:100%;height:100%;object-fit:cover}
+.profileTitle{font-size:16px;font-weight:850}.profileEmail{font-size:13px;margin-top:4px}.profileType{font-size:11px;color:#64786a;margin-top:5px}
+.profileActions{display:flex;flex-wrap:wrap;gap:8px;margin-top:13px}
+.uploadBtn{display:inline-flex;align-items:center;background:#159447;color:#fff;border:1px solid #159447;border-radius:9px;padding:9px 12px;font-size:12px;font-weight:800;cursor:pointer}
+.uploadBtn input{display:none}
+.profileNotice{margin-top:14px;padding:12px;border:1px solid #d8e8dc;border-left:4px solid #159447;background:#f4faf6;border-radius:10px;font-size:11px;line-height:1.6;color:#587060}
+
+@media(max-width:1000px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}}
+@media(max-width:600px){.wrap{padding:12px}.grid{grid-template-columns:1fr 1fr}.row{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}}
 </style>
 </head>
 <body>
@@ -50,9 +78,9 @@ footer{padding:18px 0;color:#718278;font-size:10px;text-align:center}
 <header>
   <div class="brand">
     <div class="logo">✉</div>
-    <div><h1>OnlineChurch Mail Engine</h1><div class="sub">Direct Gmail delivery · connect once, then queued mail sends automatically</div></div>
+    <div><h1>OnlineChurch Mail Engine</h1><div class="sub">Single-file Gmail delivery console · one recipient at a time</div></div>
   </div>
-  <div class="status"><span id="statusDot" class="dot"></span><span id="engineStatus">GMAIL NOT CONNECTED</span></div>
+  <div class="status"><span id="statusDot" class="dot"></span><span id="engineStatus">ENGINE STOPPED</span></div>
 </header>
 
 <div class="grid">
@@ -62,10 +90,11 @@ footer{padding:18px 0;color:#718278;font-size:10px;text-align:center}
   <div class="card stat"><div class="n" id="successRate">—</div><div class="l">SUCCESS RATE</div></div>
 </div>
 
-<div class="card">
+<div class="card" style="margin-bottom:15px">
   <div class="tabs">
     <button class="tab active" data-tab="compose">Composer</button>
     <button class="tab" data-tab="recipients">Recipients</button>
+    <button class="tab" data-tab="engine">Engine</button>
     <button class="tab" data-tab="gmail">Gmail</button>
     <button class="tab" data-tab="profile">Profile</button>
     <button class="tab" data-tab="diagnostics">Diagnostics</button>
@@ -74,381 +103,701 @@ footer{padding:18px 0;color:#718278;font-size:10px;text-align:center}
   <div id="compose" class="view active">
     <div class="body">
       <div class="row">
-        <div><label>Subject</label><input id="subject" value="Hello {name}"></div>
-        <div><label>Sender</label><input id="sender" value="" readonly></div>
+        <div><label>FROM</label><input id="sender" value="onlinechurch@gmail.com" readonly></div>
+        <div><label>SUBJECT</label><input id="subject" value="Hello {name}"></div>
       </div>
       <div style="margin-top:10px">
-        <label>Message variants</label>
+        <label>MESSAGE</label>
         <textarea id="body">Hello {name},
 
 This is a message from OnlineChurch.
 
 Best regards</textarea>
       </div>
-      <div class="note"><b>{name}</b> and <b>{email}</b> are personalized per recipient. To author multiple approved variants, separate them with a line containing exactly <b>---VARIANT---</b>. The engine rotates through them. It does not rewrite text to evade spam filters.</div>
       <div class="actions">
-        <button class="btn" onclick="saveDraft()">Save</button>
+        <button class="btn" onclick="saveDraft()">Save Draft</button>
         <button class="btn" onclick="previewMessage()">Preview</button>
         <button class="btn" onclick="clearComposer()">Clear</button>
       </div>
+      <div class="note"><b>{name}</b> is replaced with each recipient's name. The engine does not modify message content to evade spam filtering.</div>
     </div>
   </div>
 
   <div id="recipients" class="view">
     <div class="body">
       <div class="row">
-        <div><label>Email</label><input id="rEmail" placeholder="person@example.com"></div>
-        <div><label>Name</label><input id="rName" placeholder="John"></div>
+        <div><label>EMAIL</label><input id="rEmail" placeholder="person@example.com"></div>
+        <div><label>NAME</label><input id="rName" placeholder="John"></div>
       </div>
       <div class="actions">
         <button class="btn primary" onclick="addRecipient()">Add Recipient</button>
-        <button class="btn" onclick="$('csvInput').click()">Import CSV</button>
+        <button class="btn" onclick="document.getElementById('csvInput').click()">Import CSV</button>
         <button class="btn" onclick="exportCSV()">Export Results</button>
         <button class="btn bad" onclick="clearQueue()">Clear Queue</button>
         <input id="csvInput" type="file" accept=".csv,text/csv" style="display:none" onchange="importCSV(event)">
       </div>
-      <div class="note">CSV format: <b>email,name</b>. Only load people you are authorized to contact. Once Gmail is connected, pending recipients are processed automatically.</div>
+      <div class="note">CSV format: <b>email,name</b>. Only addresses you are permitted to contact should be loaded.</div>
       <div class="queue" style="margin-top:13px">
-        <table><thead><tr><th>#</th><th>Recipient</th><th>Status</th><th>Attempts</th><th>Result</th></tr></thead><tbody id="queueBody"></tbody></table>
+        <table><thead><tr><th>#</th><th>Recipient</th><th>Status</th><th>Attempts</th><th>Result</th></tr></thead>
+        <tbody id="queueBody"></tbody></table>
       </div>
+    </div>
+  </div>
+
+  <div id="engine" class="view">
+    <div class="body">
+      <div class="row">
+        <div><label>DELAY BETWEEN RECIPIENTS (SECONDS)</label><input id="delay" type="number" min="0" value="30"></div>
+        <div><label>MAX RETRIES</label><input id="retries" type="number" min="1" value="3"></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div><label>RETRY BACKOFF (SECONDS)</label><input id="backoff" type="number" min="1" value="60"></div>
+        <div><label>MODE</label><select id="mode"><option value="live">LIVE GMAIL</option><option value="dry">DRY RUN</option></select></div>
+      </div>
+      <div class="actions">
+        <button class="btn warn" onclick="resetFailed()">Reset Failed</button>
+      </div>
+      <div class="note">The queue starts automatically after Gmail is connected. Messages are sent one recipient at a time through the Gmail API. This page never asks for or stores your Gmail password.</div>
+      <div style="margin-top:14px"><label>ENGINE LOG</label><div id="log" class="log"></div></div>
     </div>
   </div>
 
   <div id="gmail" class="view">
     <div class="body">
-      <div class="callout success"><b>How this works:</b> Google handles the sign-in and permission screen. This page never asks for or stores your Gmail password or OAuth client secret. The browser then calls the Gmail API using the account you authorized.</div>
-      <div style="margin-top:14px">
-        <label>Google OAuth Web Client ID</label>
-        <input id="clientId" placeholder="1234567890-xxxxxxxx.apps.googleusercontent.com">
-        <div class="note">This is a public web client ID, not a password or client secret. It is safe to place in a browser app.</div>
-      </div>
-      <div class="actions">
-        <button id="connectBtn" class="btn primary" onclick="connectGmail()">Connect Gmail</button>
-        <button id="disconnectBtn" class="btn" onclick="disconnectGmail()">Disconnect</button>
-      </div>
-      <div style="margin-top:15px" class="kv">
+      <div class="kv">
         <div>Account</div><div id="gmailAccount">Not connected</div>
         <div>Authorization</div><div id="authState">Not connected</div>
+        <div>API</div><div>Gmail API / OAuth 2.0</div>
         <div>Transport</div><div>Browser → Gmail API</div>
-        <div>Sending</div><div>Automatic when pending mail exists</div>
       </div>
-      <div class="callout danger" style="margin-top:15px">
-        <b>Important:</b> Gmail decides final inbox placement. No browser setting can guarantee Inbox instead of Spam. The safe way to improve deliverability is to send wanted mail from the authenticated account, keep the From address aligned, authenticate the domain where applicable, avoid misleading content, honor unsubscribe requirements for promotional mail, and keep complaint rates low.
+      <div style="margin-top:14px">
+        <label>GOOGLE OAUTH WEB CLIENT ID</label>
+        <input id="googleClientId" placeholder="1234567890-xxxxxxxx.apps.googleusercontent.com" autocomplete="off">
+      </div>
+      <div class="actions">
+        <button class="btn primary" onclick="connectGmail()">Connect Gmail</button>
+        <button class="btn" onclick="disconnectGmail()">Disconnect</button>
+      </div>
+      <div class="note">
+        Uses Google's browser OAuth flow and Gmail API. No Gmail password or client secret is stored here.
+        The OAuth client must allow this site's GitHub Pages origin in <b>Authorized JavaScript origins</b>.
+        Live sending uses the <b>gmail.send</b> permission and sends as the Google account that authorizes the app.
       </div>
     </div>
   </div>
 
+
   <div id="profile" class="view">
     <div class="body">
       <div class="profileBox">
-        <div class="avatar"><span id="avatarFallback">OC</span><img id="avatarImage" alt="" style="display:none"></div>
-        <div><b id="profileEmail">Not connected</b><div class="small" id="profileType">Gmail account</div></div>
+        <div class="avatarWrap">
+          <div id="profileAvatar" class="avatar">
+            <span id="avatarFallback">OC</span>
+            <img id="avatarImage" alt="Profile picture preview" style="display:none">
+          </div>
+        </div>
+        <div class="profileInfo">
+          <div class="profileTitle">Gmail Profile</div>
+          <div id="profileEmail" class="profileEmail">onlinechurch@gmail.com</div>
+          <div id="profileType" class="profileType">Personal Gmail account</div>
+        </div>
       </div>
-      <div class="actions">
-        <label class="uploadBtn">Choose Preview<input id="profileFile" type="file" accept="image/jpeg,image/png,image/gif,image/webp" onchange="previewProfilePicture(event)"></label>
+
+      <div class="profileActions">
+        <label class="uploadBtn">
+          Choose Profile Picture
+          <input id="profileFile" type="file" accept="image/jpeg,image/png,image/gif,image/webp" onchange="previewProfilePicture(event)">
+        </label>
         <button class="btn" onclick="removeProfilePicture()">Remove Preview</button>
         <button class="btn primary" onclick="openGoogleProfile()">Open Google Profile</button>
       </div>
-      <div class="note">The local preview does not change the Google Account profile picture. Use Google's account settings for that.</div>
+
+      <div id="profilePreviewInfo" class="note">
+        Choose a square JPG/PNG/GIF/WebP image. The engine will create a local preview and remember it on this device.
+      </div>
+
+      <div class="profileNotice">
+        <b>Important:</b> for a normal <b>@gmail.com</b> account, this site cannot directly change the Google Account's official profile photo through the consumer Gmail API.
+        Use <b>Open Google Profile</b> to change the account picture in Google's own account settings.
+        Google Workspace administrators have a separate Directory API that can update a Workspace user's photo when the required administrator authorization is available.
+      </div>
     </div>
   </div>
 
   <div id="diagnostics" class="view">
     <div class="body">
-      <div class="actions"><button class="btn primary" onclick="runDiagnostics()">Run Diagnostics</button></div>
+      <div class="actions">
+        <button class="btn primary" onclick="runDiagnostics()">Run Diagnostics</button>
+      </div>
       <div id="diagOutput" class="log" style="margin-top:12px"></div>
-      <div style="margin-top:12px" class="note">Diagnostics report whether the browser, OAuth configuration, token, Gmail API and queue are ready. They cannot guarantee recipient inbox placement.</div>
+      <div class="note">Diagnostics check the local engine state. They cannot guarantee inbox placement because the recipient's provider makes the final filtering decision.</div>
     </div>
   </div>
 </div>
 
-<div style="margin-top:15px" class="card">
-  <div class="body">
-    <label>Activity</label>
-    <div id="log" class="log"></div>
-  </div>
-</div>
-<footer>OnlineChurch Mail Engine · Direct Gmail API workflow · Inbox placement is controlled by recipient providers</footer>
+<footer>OnlineChurch Mail Engine · Gmail API delivery · Inbox placement cannot be guaranteed</footer>
 </div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 "use strict";
 
-const STORAGE_KEY="onlinechurch_mail_engine_v2";
-const GMAIL_SCOPE="https://www.googleapis.com/auth/gmail.send";
-const state={
-  version:2,sender:"",queue:[],running:false,stopRequested:false,token:"",
-  tokenClient:null,profile:null,logs:[],nextVariant:0,
-  settings:{delay:30,retries:3,backoff:30,clientId:""}
+const STORAGE_KEY = "onlinechurch_mail_engine_v1";
+
+const state = {
+  version: 1,
+  sender: "onlinechurch@gmail.com",
+  queue: [],
+  running: false,
+  stopRequested: false,
+  gmailConnected: false,
+  gmailAccessToken: "",
+  gmailTokenClient: null,
+  gmailAccount: "",
+  logs: [],
+  settings: {delay:30,retries:3,backoff:60,mode:"live"}
 };
 
 function $(id){return document.getElementById(id)}
-function escapeHtml(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
+
 function log(message,type="info"){
-  const time=new Date().toLocaleTimeString();
-  state.logs.push({time,message,type}); if(state.logs.length>500)state.logs.shift();
-  $("log").innerHTML=state.logs.map(x=>`<div class="${x.type}">[${x.time}] ${escapeHtml(x.message)}</div>`).join("");
-  $("log").scrollTop=$("log").scrollHeight;
+  const time = new Date().toLocaleTimeString();
+  state.logs.push({time,message,type});
+  if(state.logs.length>500) state.logs.shift();
+  const el=$("log");
+  el.innerHTML=state.logs.map(x=>`<div class="${x.type}">[${x.time}] ${escapeHtml(x.message)}</div>`).join("");
+  el.scrollTop=el.scrollHeight;
 }
+
+function escapeHtml(s){
+  return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
+}
+
 function persist(){
-  try{
-    localStorage.setItem(STORAGE_KEY,JSON.stringify({
-      version:state.version,sender:state.sender,queue:state.queue,settings:state.settings,
-      nextVariant:state.nextVariant
-    }));
-  }catch(e){log("Could not save local state: "+e.message,"err")}
+  localStorage.setItem(STORAGE_KEY,JSON.stringify({
+    version:state.version,sender:state.sender,queue:state.queue,
+    settings:state.settings,gmailAccount:state.gmailAccount
+  }));
 }
+
 function restore(){
   try{
-    const x=JSON.parse(localStorage.getItem(STORAGE_KEY)||"null"); if(!x)return;
-    state.sender=x.sender||"";
+    const x=JSON.parse(localStorage.getItem(STORAGE_KEY)||"null");
+    if(!x)return;
+    state.sender=x.sender||state.sender;
     state.queue=Array.isArray(x.queue)?x.queue:[];
     state.settings=Object.assign(state.settings,x.settings||{});
-    state.nextVariant=Number.isInteger(x.nextVariant)?x.nextVariant:0;
-    $("clientId").value=state.settings.clientId||"";
-    $("sender").value=state.sender;
-  }catch(e){log("Saved state was invalid and was ignored.","err")}
+    state.gmailConnected=false;
+    state.gmailAccount=x.gmailAccount||"";
+    $("sender").value=state.gmailAccount||state.sender;
+    $("delay").value=state.settings.delay;
+    $("retries").value=state.settings.retries;
+    $("backoff").value=state.settings.backoff;
+    $("mode").value="live";
+    $("authState").textContent="Not connected";
+    $("googleClientId").value=localStorage.getItem("onlinechurch_google_client_id")||"";
+    $("gmailAccount").textContent=state.gmailAccount||"Not connected";
+  }catch(e){log("Local state could not be restored: "+e.message,"err")}
 }
-function render(){
-  $("queueBody").innerHTML=state.queue.map((r,i)=>{
-    const cls=r.status==="sent"?"sent":r.status==="failed"?"failed":r.status==="sending"?"sending":"pending";
-    return `<tr><td>${i+1}</td><td><b>${escapeHtml(r.email)}</b><br><span class="small">${escapeHtml(r.name)}</span></td>
-    <td><span class="badge ${cls}">${escapeHtml(r.status)}</span></td><td>${r.attempts}</td>
-    <td>${escapeHtml(r.messageId||r.error||"—")}</td></tr>`;
-  }).join("");
-  const pending=state.queue.filter(r=>r.status==="pending").length;
-  const sent=state.queue.filter(r=>r.status==="sent").length;
-  const failed=state.queue.filter(r=>r.status==="failed").length;
-  const finished=sent+failed;
-  $("pendingCount").textContent=pending;$("sentCount").textContent=sent;$("failedCount").textContent=failed;
-  $("successRate").textContent=finished?Math.round(sent/finished*100)+"%":"—";
-  $("engineStatus").textContent=state.running?"GMAIL ENGINE RUNNING":state.token?"GMAIL CONNECTED":"GMAIL NOT CONNECTED";
-  $("statusDot").className="dot"+(state.token?" good":"");
-}
+
 function addRecipient(){
-  const email=$("rEmail").value.trim(),name=$("rName").value.trim();
-  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){log("Rejected invalid recipient address.","err");return}
-  if(state.queue.some(r=>r.email.toLowerCase()===email.toLowerCase()&&r.status==="pending")){log("Recipient already exists in the pending queue.","err");return}
-  state.queue.push({id:crypto.randomUUID(),email,name,status:"pending",attempts:0,messageId:"",error:"",createdAt:new Date().toISOString()});
-  $("rEmail").value="";$("rName").value="";persist();render();log("Added recipient: "+email);
-  autoProcess();
+  const email=$("rEmail").value.trim();
+  const name=$("rName").value.trim();
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){
+    log("Rejected invalid recipient address.","err"); return;
+  }
+  if(state.queue.some(r=>r.email.toLowerCase()===email.toLowerCase() && r.status==="pending")){
+    log("Recipient already exists in the pending queue.","err"); return;
+  }
+  state.queue.push({
+    id:crypto.randomUUID(),
+    email,name,status:"pending",attempts:0,messageId:"",error:"",
+    createdAt:new Date().toISOString()
+  });
+  $("rEmail").value="";$("rName").value="";
+  persist();render();log("Added recipient: "+email);
+  autoStartIfReady();
 }
+
 function importCSV(ev){
-  const file=ev.target.files[0];if(!file)return;
+  const file=ev.target.files[0]; if(!file)return;
   const reader=new FileReader();
   reader.onload=()=>{
-    const lines=String(reader.result).split(/\r?\n/).filter(Boolean);if(!lines.length)return;
-    const headers=parseCSVLine(lines[0]).map(x=>x.trim().toLowerCase()),ei=headers.indexOf("email"),ni=headers.indexOf("name");
+    const lines=String(reader.result).split(/\r?\n/).filter(Boolean);
+    if(!lines.length)return;
+    const headers=parseCSVLine(lines[0]).map(x=>x.trim().toLowerCase());
+    const ei=headers.indexOf("email"), ni=headers.indexOf("name");
     if(ei<0){log("CSV must contain an email column.","err");return}
     let added=0;
     for(let i=1;i<lines.length;i++){
       const c=parseCSVLine(lines[i]),email=(c[ei]||"").trim(),name=ni>=0?(c[ni]||"").trim():"";
       if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))continue;
-      if(state.queue.some(r=>r.email.toLowerCase()===email.toLowerCase()&&r.status==="pending"))continue;
-      state.queue.push({id:crypto.randomUUID(),email,name,status:"pending",attempts:0,messageId:"",error:"",createdAt:new Date().toISOString()});added++;
+      state.queue.push({id:crypto.randomUUID(),email,name,status:"pending",attempts:0,messageId:"",error:"",createdAt:new Date().toISOString()});
+      added++;
     }
-    persist();render();log(`Imported ${added} recipient(s).`);autoProcess();
+    persist();render();log(`Imported ${added} recipient(s).`);
+    autoStartIfReady();
   };
   reader.readAsText(file);ev.target.value="";
 }
+
 function parseCSVLine(line){
   const out=[];let cur="",quoted=false;
-  for(let i=0;i<line.length;i++){const ch=line[i];
-    if(ch==='"'){if(quoted&&line[i+1]==='"'){cur+='"';i++}else quoted=!quoted}
-    else if(ch===","&&!quoted){out.push(cur);cur=""}else cur+=ch
-  }out.push(cur);return out;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch==='"'){
+      if(quoted && line[i+1]==='"'){cur+='"';i++} else quoted=!quoted;
+    }else if(ch===","&&!quoted){out.push(cur);cur=""}else cur+=ch;
+  }
+  out.push(cur);return out;
 }
+
 function exportCSV(){
   const rows=[["email","name","status","attempts","message_id","error"]];
   state.queue.forEach(r=>rows.push([r.email,r.name,r.status,r.attempts,r.messageId,r.error]));
-  const csv=rows.map(r=>r.map(x=>`"${String(x??"").replace(/"/g,'""')}"`).join(",")).join("\n");
-  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="onlinechurch-mail-results.csv";a.click();URL.revokeObjectURL(a.href);
+  const csv=rows.map(r=>r.map(csvCell).join(",")).join("\n");
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download="onlinechurch-mail-results.csv";a.click();URL.revokeObjectURL(a.href);
+  log("Exported queue results.");
 }
-function clearQueue(){
-  if(state.running){log("Wait for the current send to finish before clearing the queue.","err");return}
-  if(!confirm("Clear the entire recipient queue?"))return;
-  state.queue=[];persist();render();log("Queue cleared.");
+function csvCell(x){return `"${String(x??"").replace(/"/g,'""')}"`}
+
+function render(){
+  const q=$("queueBody");
+  q.innerHTML=state.queue.map((r,i)=>{
+    const cls=r.status==="sent"?"sent":r.status==="failed"?"failed":r.status==="sending"?"sending":r.status==="dry_run"?"dry":"pending";
+    return `<tr>
+      <td>${i+1}</td><td><b>${escapeHtml(r.email)}</b><br><span class="note">${escapeHtml(r.name)}</span></td>
+      <td><span class="badge ${cls}">${escapeHtml(r.status)}</span></td>
+      <td>${r.attempts}</td><td>${escapeHtml(r.messageId||r.error||"—")}</td>
+    </tr>`;
+  }).join("");
+  const pending=state.queue.filter(r=>r.status==="pending").length;
+  const sent=state.queue.filter(r=>r.status==="sent").length;
+  const failed=state.queue.filter(r=>r.status==="failed").length;
+  const finished=sent+failed;
+  $("pendingCount").textContent=pending;
+  $("sentCount").textContent=sent;
+  $("failedCount").textContent=failed;
+  $("successRate").textContent=finished?Math.round(sent/finished*100)+"%":"—";
+  $("engineStatus").textContent=state.running?"ENGINE RUNNING":"ENGINE STOPPED";
+  $("statusDot").className="dot"+(state.running?" good":"");
 }
-function saveDraft(){
-  state.settings.clientId=$("clientId").value.trim();state.sender=$("sender").value.trim();persist();log("Settings saved locally.");
-}
-function clearComposer(){$("subject").value="";$("body").value="";log("Composer cleared.")}
-function getVariants(){
-  return $("body").value.split(/\n---VARIANT---\n/).map(x=>x.trim()).filter(Boolean);
-}
-function getMessageFor(r){
-  const variants=getVariants();const i=variants.length?state.nextVariant%variants.length:0;
-  if(variants.length)state.nextVariant=(state.nextVariant+1)%variants.length;
-  const replace=x=>x.replaceAll("{name}",r.name||"").replaceAll("{email}",r.email);
-  return {subject:replace($("subject").value),body:replace(variants[i]||"")};
-}
-function previewMessage(){
-  const r=state.queue.find(x=>x.status==="pending")||{name:"Recipient",email:"person@example.com"};
-  const variants=getVariants();const body=variants[0]||"";
-  alert("SUBJECT\n\n"+$("subject").value.replaceAll("{name}",r.name||"").replaceAll("{email}",r.email)+"\n\nMESSAGE\n\n"+body.replaceAll("{name}",r.name||"").replaceAll("{email}",r.email));
-}
+
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
-function waitForGIS(){
-  return new Promise((resolve,reject)=>{
-    const start=Date.now();
-    const timer=setInterval(()=>{
-      if(window.google?.accounts?.oauth2){clearInterval(timer);resolve()}
-      else if(Date.now()-start>15000){clearInterval(timer);reject(new Error("Google Identity Services did not load. Check your connection or content blockers."))}
-    },100);
-  });
+
+function getMessageFor(r){
+  const name=r.name||"";
+  return {
+    subject:$("subject").value.replaceAll("{name}",name),
+    body:$("body").value.replaceAll("{name}",name)
+  };
 }
-async function connectGmail(){
-  const clientId=$("clientId").value.trim();
-  if(!clientId){alert("First enter your Google OAuth Web Client ID. I can guide you through creating it.");return}
-  state.settings.clientId=clientId;persist();
-  try{
-    await waitForGIS();
-    state.tokenClient=google.accounts.oauth2.initTokenClient({
-      client_id:clientId,scope:GMAIL_SCOPE,
-      callback:()=>{}
-    });
-    state.token=await requestToken(false);
-    await loadGmailProfile();
-    $("authState").textContent="Connected";
-    log("Gmail connected as "+state.sender,"ok");render();autoProcess();
-  }catch(e){state.token="";render();log("Gmail connection failed: "+e.message,"err")}
-}
-function requestToken(promptConsent){
-  return new Promise((resolve,reject)=>{
-    if(!state.tokenClient){reject(new Error("OAuth client is not ready."));return}
-    state.tokenClient.callback=(resp)=>{
-      if(resp.error){reject(new Error(resp.error_description||resp.error));return}
-      resolve(resp.access_token);
-    };
-    try{state.tokenClient.requestAccessToken({prompt:promptConsent?"consent":""})}catch(e){reject(e)}
-  });
-}
-async function loadGmailProfile(){
-  const resp=await gmailFetch("https://gmail.googleapis.com/gmail/v1/users/me/profile");
-  if(!resp.ok)throw new Error("Could not read Gmail profile ("+resp.status+").");
-  state.profile=await resp.json();
-  state.sender=state.profile.emailAddress||"";
-  $("sender").value=state.sender;$("gmailAccount").textContent=state.sender;$("profileEmail").textContent=state.sender;
-  $("profileType").textContent=/@gmail\.com$/i.test(state.sender)?"Personal Gmail account":"Google Workspace account";
-  persist();render();
-}
-async function gmailFetch(url,options={}){
-  let resp=await fetch(url,{...options,headers:{...(options.headers||{}),Authorization:"Bearer "+state.token}});
-  if(resp.status===401){
-    state.token=await requestToken(false);
-    resp=await fetch(url,{...options,headers:{...(options.headers||{}),Authorization:"Bearer "+state.token}});
+
+async function startEngine(){
+  if(state.running)return;
+
+  state.sender=state.gmailAccount||$("sender").value.trim()||"onlinechurch@gmail.com";
+  state.settings.delay=Math.max(0,Number($("delay").value)||30);
+  state.settings.retries=Math.max(1,Number($("retries").value)||3);
+  state.settings.backoff=Math.max(1,Number($("backoff").value)||60);
+  state.settings.mode="live";
+  $("mode").value="live";
+  persist();
+
+  const pending=state.queue.filter(r=>r.status==="pending");
+  if(!pending.length){render();return}
+
+  if(!state.gmailConnected||!state.gmailAccessToken){
+    log("Queue is ready. Connect Gmail to send automatically.","info");
+    render();
+    return;
   }
-  return resp;
+
+  state.running=true;
+  state.stopRequested=false;
+  render();
+  log("Automatic Gmail delivery started.","info");
+
+  try{
+    for(const r of state.queue){
+      if(state.stopRequested)break;
+      if(r.status!=="pending")continue;
+
+      r.status="sending";
+      r.attempts=0;
+      r.error="";
+      render();
+      persist();
+
+      const msg=getMessageFor(r);
+      let success=false;
+
+      for(let attempt=1;attempt<=state.settings.retries;attempt++){
+        if(state.stopRequested)break;
+        r.attempts=attempt;
+        render();
+
+        try{
+          const result=await sendViaConfiguredAdapter(r,msg);
+          if(result.ok){
+            r.status="sent";
+            r.messageId=result.messageId||"accepted";
+            log(`SENT: ${r.email}`,"ok");
+            success=true;
+            break;
+          }
+          throw new Error(result.error||"Gmail rejected the message");
+        }catch(e){
+          r.error=e.message||String(e);
+          log(`Attempt ${attempt} failed for ${r.email}: ${r.error}`,"err");
+          if(attempt<state.settings.retries){
+            await sleep(state.settings.backoff*1000*attempt);
+          }
+        }
+      }
+
+      if(!success&&!state.stopRequested)r.status="failed";
+      persist();
+      render();
+
+      if(state.stopRequested)break;
+      if(state.queue.some(x=>x.status==="pending")){
+        await sleep(state.settings.delay*1000);
+      }
+    }
+  }finally{
+    state.running=false;
+    render();
+    persist();
+    log(state.stopRequested?"Automatic delivery paused.":"Queue processing finished.","info");
+    state.stopRequested=false;
+  }
 }
-function utf8Bytes(s){return new TextEncoder().encode(s)}
-function base64Url(s){
-  const bytes=utf8Bytes(s);let binary="";
-  for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
+
+function autoStartIfReady(){
+  if(state.gmailConnected&&state.gmailAccessToken&&!state.running){
+    setTimeout(()=>startEngine(),100);
+  }
+}
+
+function base64UrlFromBytes(bytes){
+  let binary="";
+  const chunk=0x8000;
+  for(let i=0;i<bytes.length;i+=chunk){
+    binary+=String.fromCharCode(...bytes.subarray(i,i+chunk));
+  }
   return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 }
-function encodeHeader(s){return "=?UTF-8?B?"+base64Url(s)+"?="}
-function makeRawMessage(to,subject,body){
-  const safeSubject=encodeHeader(subject||"");
-  const lines=[
+
+function utf8Base64Url(value){
+  return base64UrlFromBytes(new TextEncoder().encode(String(value)));
+}
+
+function encodeMimeHeader(value){
+  const s=String(value||"").replace(/[\r\n]+/g," ");
+  return /[^\x20-\x7E]/.test(s)
+    ? "=?UTF-8?B?"+btoa(unescape(encodeURIComponent(s)))+"?="
+    : s;
+}
+
+function makeRawMessage(to,subject,body,from){
+  const safeTo=String(to||"").replace(/[\r\n]/g,"");
+  const safeFrom=String(from||"").replace(/[\r\n]/g,"");
+  const safeBody=String(body||"").replace(/\r\n/g,"\n").replace(/\r/g,"\n");
+  const mime=[
+    `From: ${safeFrom}`,
+    `To: ${safeTo}`,
+    `Subject: ${encodeMimeHeader(subject)}`,
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: 8bit",
-    "From: "+state.sender,
-    "To: "+to,
-    "Subject: "+safeSubject,
     "",
-    body
-  ];
-  return base64Url(lines.join("\r\n"));
+    safeBody
+  ].join("\r\n");
+  return utf8Base64Url(mime);
 }
-async function sendViaGmail(recipient,message){
-  if(!state.token)throw new Error("Gmail is not connected.");
-  if(!state.sender)throw new Error("Authenticated Gmail address is missing.");
-  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(recipient.email))throw new Error("Invalid recipient address.");
-  const raw=makeRawMessage(recipient.email,message.subject,message.body);
-  const resp=await gmailFetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",{
-    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({raw})
-  });
-  const data=await resp.json().catch(()=>({}));
-  if(!resp.ok)throw new Error(data?.error?.message||("Gmail API error "+resp.status));
-  return data;
-}
-async function autoProcess(){
-  if(state.running||!state.token)return;
-  const pending=state.queue.filter(r=>r.status==="pending");
-  if(!pending.length)return;
-  state.running=true;render();log("Automatic queue processing started.","info");
-  try{
-    for(const r of state.queue){
-      if(r.status!=="pending")continue;
-      r.status="sending";r.attempts=0;r.error="";render();persist();
-      let success=false;
-      for(let attempt=1;attempt<=3;attempt++){
-        r.attempts=attempt;render();
-        try{
-          const msg=getMessageFor(r);
-          const result=await sendViaGmail(r,msg);
-          r.status="sent";r.messageId=result.id||result.threadId||"accepted";
-          log("Sent successfully to "+r.email,"ok");success=true;break;
-        }catch(e){
-          r.error=e.message||String(e);log("Attempt "+attempt+" failed for "+r.email+": "+r.error,"err");
-          if(/invalid_grant|unauthorized|401/i.test(r.error))state.token="";
-          if(attempt<3)await sleep(Math.min(60000,3000*Math.pow(2,attempt-1)+Math.floor(Math.random()*1000)));
-        }
+
+async function refreshGmailToken(){
+  if(!state.gmailTokenClient){
+    throw new Error("Gmail authorization is not initialized. Connect Gmail again.");
+  }
+
+  return new Promise((resolve,reject)=>{
+    state.gmailTokenClient.callback=(response)=>{
+      if(response&&response.access_token){
+        state.gmailAccessToken=response.access_token;
+        resolve(response.access_token);
+      }else{
+        reject(new Error(response?.error_description||response?.error||"Google authorization failed."));
       }
-      if(!success)r.status="failed";
-      persist();render();
-      if(!state.token){log("Gmail authorization is no longer valid. Reconnect Gmail.","err");break}
-      if(state.queue.some(x=>x.status==="pending"))await sleep(30000);
+    };
+    try{
+      state.gmailTokenClient.requestAccessToken({prompt:"none"});
+    }catch(e){
+      reject(e);
     }
-  }finally{state.running=false;persist();render();log("Automatic queue processing finished.","info")}
+  });
 }
-function disconnectGmail(){
-  state.token="";
-  $("authState").textContent="Not connected";$("gmailAccount").textContent="Not connected";
-  $("profileEmail").textContent="Not connected";$("sender").value="";
-  state.sender="";persist();render();log("Gmail disconnected.");
+
+async function gmailFetch(url,options={},retry=true){
+  if(!state.gmailAccessToken)throw new Error("Gmail is not connected.");
+
+  const headers=new Headers(options.headers||{});
+  headers.set("Authorization","Bearer "+state.gmailAccessToken);
+  if(options.body&&!headers.has("Content-Type")){
+    headers.set("Content-Type","application/json");
+  }
+
+  const response=await fetch(url,Object.assign({},options,{headers}));
+
+  if(response.status===401&&retry){
+    await refreshGmailToken();
+    return gmailFetch(url,options,false);
+  }
+
+  if(!response.ok){
+    let detail="";
+    try{
+      const data=await response.json();
+      detail=data?.error?.message||"";
+    }catch(_){}
+    throw new Error(detail||`Gmail API HTTP ${response.status}`);
+  }
+  return response;
 }
+
+async function sendViaConfiguredAdapter(recipient,message){
+  if(!state.gmailConnected||!state.gmailAccessToken){
+    return {ok:false,error:"Gmail is not connected."};
+  }
+
+  const raw=makeRawMessage(
+    recipient.email,
+    message.subject,
+    message.body,
+    state.gmailAccount||$("sender").value.trim()
+  );
+
+  const response=await gmailFetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    {method:"POST",body:JSON.stringify({raw})}
+  );
+  const data=await response.json();
+  return {ok:true,messageId:data.id||"sent"};
+}
+
+function stopEngine(){
+  if(!state.running)return;
+  state.stopRequested=true;
+  log("Stop requested; current operation will finish.","info");
+}
+
 function resetFailed(){
-  let n=0;state.queue.forEach(r=>{if(r.status==="failed"){r.status="pending";r.attempts=0;r.error="";r.messageId="";n++}});
-  persist();render();log(`Reset ${n} failed recipient(s).`);autoProcess();
+  let n=0;
+  state.queue.forEach(r=>{if(r.status==="failed"||r.status==="dry_run"){r.status="pending";r.attempts=0;r.error="";r.messageId="";n++}});
+  persist();render();log(`Reset ${n} recipient(s) to pending.`);
 }
+
+function clearQueue(){
+  if(state.running){log("Stop the engine before clearing the queue.","err");return}
+  if(!confirm("Clear the entire recipient queue?"))return;
+  state.queue=[];persist();render();log("Queue cleared.");
+}
+
+function saveDraft(){
+  state.sender=$("sender").value;
+  loadProfilePicture();
+  state.settings.delay=Number($("delay").value)||30;
+  state.settings.retries=Number($("retries").value)||3;
+  state.settings.backoff=Number($("backoff").value)||60;
+  persist();log("Draft/settings saved locally.");
+}
+
+function previewMessage(){
+  const r=state.queue.find(x=>x.status==="pending")||{name:"Recipient"};
+  const m=getMessageFor(r);
+  alert("SUBJECT\n\n"+m.subject+"\n\nMESSAGE\n\n"+m.body);
+}
+
+function clearComposer(){
+  $("subject").value="";$("body").value="";
+  log("Composer cleared.");
+}
+
+function connectGmail(){
+  loadProfilePicture();
+
+  const clientId=$("googleClientId").value.trim()||
+    localStorage.getItem("onlinechurch_google_client_id")||"";
+
+  if(!clientId){
+    log("Enter the Google OAuth Web Client ID first.","err");
+    $("googleClientId").focus();
+    return;
+  }
+
+  if(!window.google||!google.accounts||!google.accounts.oauth2){
+    log("Google Identity Services is still loading. Try again in a moment.","err");
+    return;
+  }
+
+  localStorage.setItem("onlinechurch_google_client_id",clientId);
+
+  state.gmailTokenClient=google.accounts.oauth2.initTokenClient({
+    client_id:clientId,
+    scope:"https://www.googleapis.com/auth/gmail.send",
+    callback:async(response)=>{
+      if(response?.error){
+        state.gmailConnected=false;
+        state.gmailAccessToken="";
+        $("authState").textContent="Authorization failed";
+        persist();
+        log(response.error_description||response.error||"Google authorization failed.","err");
+        return;
+      }
+
+      state.gmailAccessToken=response.access_token||"";
+      if(!state.gmailAccessToken){
+        log("Google returned no access token.","err");
+        return;
+      }
+
+      try{
+        const profileResponse=await gmailFetch(
+          "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+          {method:"GET"}
+        );
+        const profile=await profileResponse.json();
+
+        state.gmailAccount=profile.emailAddress||"";
+        state.sender=state.gmailAccount||state.sender;
+        state.gmailConnected=true;
+
+        $("gmailAccount").textContent=state.gmailAccount||"Connected Gmail";
+        $("authState").textContent="Connected";
+        $("sender").value=state.gmailAccount||$("sender").value;
+
+        persist();
+        render();
+        log(`Gmail connected: ${state.gmailAccount||"authorized account"}`,"ok");
+        autoStartIfReady();
+      }catch(e){
+        state.gmailConnected=false;
+        state.gmailAccessToken="";
+        $("authState").textContent="Connection failed";
+        persist();
+        log("Gmail connection failed: "+e.message,"err");
+      }
+    }
+  });
+
+  $("authState").textContent="Waiting for Google authorization…";
+  log("Opening Google authorization…","info");
+  state.gmailTokenClient.requestAccessToken({prompt:"consent"});
+}
+
+function disconnectGmail(){
+  if(state.running)stopEngine();
+
+  if(state.gmailAccessToken&&window.google?.accounts?.oauth2){
+    try{google.accounts.oauth2.revoke(state.gmailAccessToken,()=>{});}catch(_){}
+  }
+
+  state.gmailConnected=false;
+  state.gmailAccessToken="";
+  state.gmailTokenClient=null;
+  state.gmailAccount="";
+
+  $("gmailAccount").textContent="Not connected";
+  $("authState").textContent="Not connected";
+  $("sender").value="onlinechurch@gmail.com";
+
+  persist();
+  log("Gmail connection cleared.");
+}
+
+
 function previewProfilePicture(ev){
-  const file=ev.target.files[0];if(!file)return;
-  if(!/^image\/(jpeg|png|gif|webp)$/.test(file.type)||file.size>8*1024*1024){log("Unsupported or oversized profile preview.","err");return}
-  const reader=new FileReader();reader.onload=()=>{localStorage.setItem("onlinechurch_profile_preview",reader.result);loadProfilePicture();};reader.readAsDataURL(file);
+  const file=ev.target.files[0];
+  if(!file)return;
+  if(!/^image\/(jpeg|png|gif|webp)$/.test(file.type)){
+    log("Unsupported profile image type.","err");return;
+  }
+  if(file.size>8*1024*1024){
+    log("Profile image is larger than 8 MB.","err");return;
+  }
+  const reader=new FileReader();
+  reader.onload=()=>{
+    const data=reader.result;
+    $("avatarImage").src=data;
+    $("avatarImage").style.display="block";
+    $("avatarFallback").style.display="none";
+    localStorage.setItem("onlinechurch_profile_preview",data);
+    $("profilePreviewInfo").textContent="Profile picture preview saved locally on this device.";
+    log("Profile picture preview updated.");
+  };
+  reader.readAsDataURL(file);
 }
+
+function removeProfilePicture(){
+  localStorage.removeItem("onlinechurch_profile_preview");
+  $("avatarImage").removeAttribute("src");
+  $("avatarImage").style.display="none";
+  $("avatarFallback").style.display="block";
+  $("profileFile").value="";
+  $("profilePreviewInfo").textContent="No local profile picture preview is selected.";
+  log("Local profile picture preview removed.");
+}
+
 function loadProfilePicture(){
   const data=localStorage.getItem("onlinechurch_profile_preview");
-  if(data){$("avatarImage").src=data;$("avatarImage").style.display="block";$("avatarFallback").style.display="none"}
+  if(data){
+    $("avatarImage").src=data;
+    $("avatarImage").style.display="block";
+    $("avatarFallback").style.display="none";
+    $("profilePreviewInfo").textContent="Profile picture preview loaded from this device.";
+  }
+  const email=$("sender").value.trim()||"onlinechurch@gmail.com";
+  $("profileEmail").textContent=email;
+  $("gmailAccount").textContent=email;
+  const isWorkspace=!/@gmail\.com$/i.test(email);
+  $("profileType").textContent=isWorkspace?"Google Workspace account":"Personal Gmail account";
 }
-function removeProfilePicture(){localStorage.removeItem("onlinechurch_profile_preview");$("avatarImage").removeAttribute("src");$("avatarImage").style.display="none";$("avatarFallback").style.display="block"}
-function openGoogleProfile(){window.open("https://myaccount.google.com/personal-info","_blank","noopener,noreferrer")}
-async function runDiagnostics(){
-  const tests=[
-    ["Browser local storage",!!window.localStorage],
-    ["Crypto UUID",!!crypto?.randomUUID],
-    ["Google Identity Services",!!window.google?.accounts?.oauth2],
-    ["OAuth client ID",!!$("clientId").value.trim()],
-    ["Gmail authorization",!!state.token],
-    ["Authenticated sender",!!state.sender],
-    ["Queue",Array.isArray(state.queue)],
-    ["Gmail API transport","Direct Gmail API"],
-    ["Inbox placement","Provider-controlled"]
-  ];
-  $("diagOutput").innerHTML=tests.map(t=>`<div class="${t[1]===true?"ok":"info"}">[${t[0]}] ${t[1]===true?"PASS":t[1]===false?"NOT READY":escapeHtml(t[1])}</div>`).join("");
+
+function openGoogleProfile(){
+  window.open("https://myaccount.google.com/personal-info","_blank","noopener,noreferrer");
+  log("Opened Google's profile settings.");
+}
+
+function runDiagnostics(){
+  const tests=[];
+  tests.push(["Browser",!!window.localStorage]);
+  tests.push(["Local storage",!!localStorage]);
+  tests.push(["Crypto UUID",!!(crypto&&crypto.randomUUID)]);
+  tests.push(["Queue loaded",Array.isArray(state.queue)]);
+  tests.push(["Sender configured",/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test($("sender").value)]);
+  tests.push(["Google Identity Services",!!(window.google&&google.accounts&&google.accounts.oauth2)]);
+  tests.push(["Gmail OAuth access",state.gmailConnected&&!!state.gmailAccessToken]);
+  tests.push(["Gmail transport","Browser → Gmail API"]);
+  tests.push(["Inbox placement","Provider-controlled; cannot be guaranteed"]);
+  $("diagOutput").innerHTML=tests.map(t=>`<div class="${t[1]===true?"ok":"info"}">[${t[0]}] ${t[1]===true?"PASS":t[1]===false?"FAIL":escapeHtml(t[1])}</div>`).join("");
   log("Diagnostics completed.");
 }
-document.querySelectorAll(".tab").forEach(btn=>btn.addEventListener("click",()=>{
-  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
-  document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));
-  btn.classList.add("active");$(btn.dataset.tab).classList.add("active");
-}));
-$("clientId").addEventListener("change",()=>{state.settings.clientId=$("clientId").value.trim();persist()});
+
+document.querySelectorAll(".tab").forEach(btn=>{
+  btn.addEventListener("click",()=>{
+    document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+    document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));
+    btn.classList.add("active");$(btn.dataset.tab).classList.add("active");
+  });
+});
+
 window.addEventListener("beforeunload",persist);
-restore();render();loadProfilePicture();log("OnlineChurch Mail Engine initialized.");
-if(state.settings.clientId)$("clientId").value=state.settings.clientId;
+
+restore();render();loadProfilePicture();
+log("OnlineChurch Mail Engine initialized.");
 runDiagnostics();
 </script>
 </body>
