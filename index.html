@@ -1,5 +1,4 @@
-X
-<!-- Ice hockey engine: SofaScore data feeds; no prediction model is installed in this build. -->
+<!-- Ice hockey engine: Sportradar stats feed; prediction model ih-poisson-v1 (see the model script near the end of this file). -->
 <!-- BB-ENGINE-SECTION:MASTER:MASTER-001 START | RANGE=1-66614| CODE_LINES=51457 | SHARE=100.00% | NAME=complete-engine-physical-coverage | CLASS=ENGINE-WIDE-COVERAGE -->
  
  
@@ -13,6 +12,38 @@ X
 <!-- BB-ENGINE-SECTION:HTML:HTML-001 END -->
 
 <!-- BB-ENGINE-SECTION:HTML:HTML-013 START | RANGE=13-36| CODE_LINES=2 | SHARE=0.13% | NAME=script-container-001 | CLASS=SCRIPT-HOST-CONTAINER -->
+<script>
+/* Ice hockey storage epoch.
+   This build carries no basketball data. On first run the engine's old (basketball-era) local keys are moved,
+   not deleted, to BKARCH_<key>; databases are opened under an IH_ prefix so the old ones are never read.
+   The tracker cloud namespace was also changed (see TRACKER_FIXED_USER_KEY), so basketball picks stored in the
+   cloud are not pulled in. Nothing is erased: the archived copies stay in this browser / that cloud namespace. */
+(function () {
+  try {
+    var EPOCH = "ice-hockey-1", MARK = "BB_SPORT_EPOCH";
+    var ls = window.localStorage;
+    if (ls.getItem(MARK) !== EPOCH) {
+      var keep = /^(engineUnlock|theme$|BB_CLOUD_(URL|TOKEN|CFG)$|BB_SR_HOCKEY_LEAGUES_V1$|BB_SPORT_EPOCH$|BKARCH_)/;
+      var keys = [], i;
+      for (i = 0; i < ls.length; i++) keys.push(ls.key(i));
+      var moved = 0, skipped = [];
+      keys.forEach(function (k) {
+        if (k == null || keep.test(k)) return;
+        try { ls.setItem("BKARCH_" + k, ls.getItem(k)); ls.removeItem(k); moved++; } catch (_q) { skipped.push(k); }
+      });
+      ls.setItem(MARK, EPOCH);
+      window.__bbEpochMigration = { moved: moved, skipped: skipped };
+    }
+    var proto = window.IDBFactory && window.IDBFactory.prototype;
+    if (proto && !proto.__bbHockeyNs) {
+      var _open = proto.open, _del = proto.deleteDatabase;
+      proto.open = function (name, ver) { var n = "IH_" + String(name); return ver === undefined ? _open.call(this, n) : _open.call(this, n, ver); };
+      proto.deleteDatabase = function (name) { return _del.call(this, "IH_" + String(name)); };
+      proto.__bbHockeyNs = true;
+    }
+  } catch (_e) {}
+})();
+</script>
 <script>
 /* BB-ENGINE-SECTION:JS:JS-001 START | RANGE=15-34| CODE_LINES=17 | SHARE=0.04% | NAME=runtime-busy-idle-scheduler | CLASS=RUNTIME-SCHEDULER */
  
@@ -496,7 +527,7 @@ X
     esc = esc || function (s) { return String(s); };
     var last = st.lastBackup || Number(lsGet("BB_DUR_LAST_BACKUP")) || 0, g = null; try { g = window.bbALGetState && window.bbALGetState(); } catch (_e) {}
     var row = function (a, b) { return '<div class="row"><span>' + a + "</span><span>" + b + "</span></div>"; };
-    var h = row("Durable copy (IndexedDB)", st.idbOk ? "ON · " + st.bigGames + " team games · " + st.bigQuarterGames + " quarter games · " + st.lsKeysMirrored + " saved items" : '<b style="color:#f59e0b">unavailable</b>');
+    var h = row("Durable copy (IndexedDB)", st.idbOk ? "ON · " + st.bigGames + " team games · " + st.bigQuarterGames + " period games · " + st.lsKeysMirrored + " saved items" : '<b style="color:#f59e0b">unavailable</b>');
     h += row("Ledger mirror", st.idbOk ? st.ledgerMirror + " runs" + (st.ledgerRecovered ? " · recovered " + st.ledgerRecovered : "") : "–");
     h += row("Browser protection", st.persisted === true ? "Granted" : st.persisted === false ? "Not granted" : "Checking…");
     h += row("Last backup", esc(fmt(last)));
@@ -1376,7 +1407,7 @@ function bbSportyStatus(msg, bad) {
     var a = (document.getElementById("teamAName") || {}).value || "Team A", b = (document.getElementById("teamBName") || {}).value || "Team B";
      
     [["aFTH2H", a, "home"], ["bFTH2H", b, "away"], ["a1HH2H", a, "home"], ["b1HH2H", b, "away"]].forEach(function (x) {
-      var el = document.getElementById(x[0]); if (el) { el.placeholder = x[1] + " (" + x[2] + ") points in H2H, newest first"; el.setAttribute("aria-label", el.placeholder); }
+      var el = document.getElementById(x[0]); if (el) { el.placeholder = x[1] + " (" + x[2] + ") goals in H2H, newest first"; el.setAttribute("aria-label", el.placeholder); }
     });
   }
   document.addEventListener("input", function (e) { if (e && e.target && (e.target.id === "teamAName" || e.target.id === "teamBName")) relabel(); });
@@ -6745,11 +6776,110 @@ function ssPeriodGoals(scoreObj) {
   return { p: p, ot: ot, shootout: so, periodsComplete: periodsComplete, regulation: regulation };
 }
 
-// ---- SofaScore ice hockey result adapter -------------------------------------------------
-// Converts a SofaScore event into the competition shape the tracker's live-clock and settlement code reads
-// (competitors[] with score + linescores, and status.type.state / completed). Linescores are P1, P2, P3 and,
-// when the provider supplies it, overtime. Shootout goals are not counted as overtime goals.
-function sofaHockeyEventToCompetition(ev) {
+// ---- Sportradar (gismo) ice hockey client ---------------------------------------------------
+// Same public stats feed the original engine used for matches: season fixtures, last-N team results,
+// head-to-head and single-match info. Hockey payloads are normalised into one event shape
+// (home/away team, period goals, status) that the rest of the engine already understands.
+const SR_GISMO_BASE = "https://stats.fn.sportradar.com/sportradar/en/Etc:UTC/gismo/";
+const SR_HOCKEY_SPORT_ID = 4;
+const _srCache = new Map();
+async function srGet(path, maxAgeMs, timeoutMs) {
+  const hit = _srCache.get(path);
+  if (hit && Date.now() - hit.at < (maxAgeMs || 120000)) return hit.data;
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const t = ctrl ? setTimeout(function () { ctrl.abort(); }, timeoutMs || 15000) : null;
+  try {
+    const r = await fetch(SR_GISMO_BASE + path, ctrl ? { signal: ctrl.signal } : {});
+    if (!r.ok) throw new Error("Sportradar HTTP " + r.status);
+    const j = await r.json();
+    const d = j && j.doc && j.doc[0];
+    if (!d || d.event === "exception") throw new Error("Sportradar: " + ((d && d.data && d.data.message) || "no data"));
+    _srCache.set(path, { at: Date.now(), data: d.data });
+    return d.data;
+  } finally { if (t) clearTimeout(t); }
+}
+
+function srHockeyStatusText(m) {
+  const vals = [];
+  const add = function (v) {
+    if (v == null) return;
+    if (typeof v === "string" || typeof v === "number") vals.push(String(v));
+    else if (typeof v === "object") [v.name, v.description, v.short_name, v.shortName, v.value, v.status, v.type].forEach(add);
+  };
+  add(m && m.status); add(m && m.matchstatus); add(m && m.status_name);
+  return vals.join(" ").toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function srHockeyNotPlayed(m) {
+  if (!m) return false;
+  return !!(m.postponed || m.cancelled || m.canceled || m.abandoned || m.walkover) || /postpon|cancel|abandon|walkover/.test(srHockeyStatusText(m));
+}
+
+function srHockeyIsEnded(m) {
+  if (!m || srHockeyNotPlayed(m) || m.interrupted === true) return false;
+  const sid = m.status && typeof m.status === "object" ? Number(m.status._id) : NaN;
+  if ([100, 110, 120].indexOf(sid) !== -1) return true;
+  const text = srHockeyStatusText(m);
+  if (/\b(interrupt|delay|suspend|live|started|in progress|not started|scheduled|created|period|pause|break|intermission)\b/.test(text)) return false;
+  if (String(m.matchstatus || "") === "result") return true;
+  return /\b(ended|closed|complete|completed|finished|final|result|after overtime|after ot|after penalties|aot|aet)\b/.test(text);
+}
+
+// Normalise a Sportradar hockey match into the common event shape.
+function srMatchToHockeyEvent(m) {
+  if (!m || !m.teams || !m.teams.home || !m.teams.away) return null;
+  const res = m.result || {}, per = m.periods || {};
+  const num = function (v) { if (v === null || v === undefined || v === "") return null; const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; };
+  const ended = srHockeyIsEnded(m), notPlayed = srHockeyNotPlayed(m);
+  const text = srHockeyStatusText(m);
+  const periodNo = Number(m.p) || 0;
+  const live = !ended && !notPlayed && (String(m.matchstatus || "") === "live" || periodNo > 0 || /period|pause|break|intermission|overtime|penalt/.test(text));
+  const scoreOf = function (k) {
+    const g = function (key) { return per[key] ? num(per[key][k]) : null; };
+    const p1 = g("p1"), p2 = g("p2"), p3 = g("p3");
+    let ot = null, so = null;
+    Object.keys(per).forEach(function (key) {
+      if (/^(ot\d*|p[4-9])$/.test(key)) { const v = g(key); if (v !== null) ot = (ot || 0) + v; }
+      else if (/^(so|pt|pen|penalties|ap)$/.test(key)) { const v = g(key); if (v !== null) so = v; }
+    });
+    let cur = num(res[k]);
+    if (cur === null && per.ft) cur = num(per.ft[k]);
+    const sc = { current: cur, display: cur, period1: p1, period2: p2, period3: p3 };
+    if (ot !== null) sc.overtime = ot;
+    if (so !== null) sc.penalties = so;
+    if (p1 !== null && p2 !== null && p3 !== null) sc.normaltime = p1 + p2 + p3;
+    return sc;
+  };
+  const hs = scoreOf("home"), as = scoreOf("away");
+  const wentSO = hs.penalties != null || as.penalties != null || /penalt|shootout/.test(text);
+  const wentOT = wentSO || hs.overtime != null || as.overtime != null || /overtime|after ot|aot|aet/.test(text);
+  const periodText = /pause|break|intermission/.test(text) ? "Pause" : periodNo === 1 ? "1st period" : periodNo === 2 ? "2nd period" : periodNo === 3 ? "3rd period" : periodNo >= 4 ? "Overtime" : (m.status && m.status.name) || "";
+  const type = notPlayed ? (/cancel|abandon/.test(text) || m.cancelled || m.canceled || m.abandoned ? "canceled" : "postponed") : ended ? "finished" : live ? "inprogress" : "notstarted";
+  const description = ended ? (wentSO ? "Ended after penalties" : wentOT ? "Ended after overtime" : "Ended") : live ? periodText : notPlayed ? type : "Not started";
+  const ti = m.timeinfo || {};
+  const played = Number(ti.played);
+  const plen = (Number(m.periodlength) || 20) * 60;
+  let periodStart;
+  if (live && Number.isFinite(played) && ti.played != null && periodNo > 0 && !/pause|break|intermission/.test(text)) {
+    const elapsed = Math.max(0, played - Math.min(periodNo - 1, 3) * plen);
+    periodStart = Math.floor(Date.now() / 1000 - elapsed);
+  }
+  const tm = function (t) { return { id: String(t.uid != null ? t.uid : t._id), name: t.mediumname || t.name || "", shortName: t.name || "", nameCode: t.abbr || "" }; };
+  const venueRaw = m.venue || m.stadium || m.arena || {};
+  const ev = {
+    id: String(m._id), startTimestamp: Number(m.time && m.time.uts) || 0,
+    status: { type: type, description: description, finished: ended },
+    tournament: { name: m._tournamentName || "", category: { name: "", sport: { slug: "ice-hockey" } }, uniqueTournament: { id: m._utid != null ? String(m._utid) : "", name: m._tournamentName || "" } },
+    homeTeam: tm(m.teams.home), awayTeam: tm(m.teams.away), homeScore: hs, awayScore: as,
+    seasonId: m._seasonid != null ? String(m._seasonid) : "",
+    winnerSide: m.result && (m.result.winner === "home" || m.result.winner === "away") ? m.result.winner : null,
+    venue: typeof venueRaw === "string" ? { name: venueRaw } : { name: venueRaw.name || venueRaw.fullName || "", stadium: { name: venueRaw.name || "" }, city: { name: (venueRaw.city && venueRaw.city.name) || venueRaw.city || "" }, country: { name: (venueRaw.country && venueRaw.country.name) || venueRaw.country || "" } },
+  };
+  if (periodStart) ev.time = { currentPeriodStartTimestamp: periodStart };
+  return ev;
+}
+
+function hockeyEventToCompetition(ev) {
   if (!ev || typeof ev !== "object") return null;
   const type = String(ev.status?.type || "").toLowerCase();
   const desc = String(ev.status?.description || "");
@@ -6778,6 +6908,7 @@ function sofaHockeyEventToCompetition(ev) {
   if (finished && Number.isInteger(Number(home.score)) && Number.isInteger(Number(away.score))) {
     home.winner = Number(home.score) > Number(away.score); away.winner = Number(away.score) > Number(home.score);
   }
+  if (finished && ev.winnerSide) { home.winner = ev.winnerSide === "home"; away.winner = ev.winnerSide === "away"; }
   let period = 0;
   if (/1st/.test(dl)) period = 1; else if (/2nd/.test(dl)) period = 2; else if (/3rd/.test(dl)) period = 3; else if (/overtime|extra/.test(dl)) period = 4;
   if (!period && live) period = Math.max(home.linescores.length, away.linescores.length) || 1;
@@ -6796,27 +6927,37 @@ function sofaHockeyEventToCompetition(ev) {
       const el = Math.max(0, Math.min(period >= 4 ? 5 * 60 : 20 * 60, Math.floor(Date.now() / 1000 - st)));
       return String(Math.floor(el / 60)).padStart(2, "0") + ":" + String(el % 60).padStart(2, "0");
     })(), type: { state: state, completed: finished, name: name, description: desc, detail: desc, shortDetail: desc } },
-    _sofascore: true,
+    _hockeyFeed: true,
     competitionId: ev.tournament?.uniqueTournament?.id ?? null,
     competitionName: ev.tournament?.uniqueTournament?.name || ev.tournament?.name || "",
   };
 }
 
-async function fetchSofaHockeyCompetitionForEvent(eventId) {
+async function fetchHockeyCompetitionForEvent(eventId) {
   const id = String(eventId == null ? "" : eventId).trim();
   if (!/^\d+$/.test(id)) return null;
-  const data = await proxyFetch("https://api.sofascore.com/api/v1/event/" + id, 8000).catch(function () { return null; });
-  const ev = data && (data.event || data);
-  if (!ev || String(ev.id) !== id) return null;
-  return sofaHockeyEventToCompetition(ev);
+  const d = await srGet("match_info/" + encodeURIComponent(id), 10000);
+  const m = d && (d.match || d);
+  if (!m || String(m._id) !== id) return null;
+  // Some finished matches carry no result in match_info; the season fixtures list does.
+  try {
+    const r = m.result || {};
+    if ((r.home == null || r.away == null) && srHockeyIsEnded(m) && m._seasonid != null) {
+      const fx = await srGet("stats_season_fixtures2/" + m._seasonid + "/1", 120000).catch(function () { return null; });
+      const hit = fx && Array.isArray(fx.matches) ? fx.matches.find(function (x) { return String(x && x._id) === id; }) : null;
+      if (hit && hit.result) return hockeyEventToCompetition(srMatchToHockeyEvent(Object.assign({}, m, { result: hit.result, periods: hit.periods || m.periods })));
+    }
+  } catch (_fb) {}
+  return hockeyEventToCompetition(srMatchToHockeyEvent(m));
 }
 
 // Same return shape the live-clock poller expects: [{ id, competitions: [competition] }]
-async function bbLiveFetchSofaEvents(eventIds) {
+async function bbLiveFetchHockeyEvents(eventIds) {
   const ids = Array.from(new Set((eventIds || []).map(String).filter(function (x) { return /^\d+$/.test(x); })));
   const out = [];
   for (const id of ids) {
-    const comp = await fetchSofaHockeyCompetitionForEvent(id);
+    let comp = null;
+    try { comp = await fetchHockeyCompetitionForEvent(id); } catch (_e) { comp = null; }
     if (comp) out.push({ id: id, competitions: [comp] });
   }
   return out;
@@ -7986,7 +8127,6 @@ async function parseSofascoreIndividual(side) {
       );
     }
     let events = ssExtractPastedEvents(parsed);
-    // Hockey events are not written to a learner store (no hockey model is installed).
 
      
     if (!events.length) {
@@ -8018,7 +8158,7 @@ async function parseSofascoreIndividual(side) {
     const _tUnique = String(firstEvent?.tournament?.uniqueTournament?.name || "").toLowerCase();
     const _tSlug = String(firstEvent?.tournament?.uniqueTournament?.slug || "").toLowerCase();
     const _tBlob = (String(tournamentName || "") + " " + _tUnique + " " + _tSlug).toLowerCase();
-    const isWomenEvent = /women|wnba|wnbl|wcba|dbbl|kbsl|bsnf|lnbf|blk|kobiet|kadinlar|ladies|femenin|feminin|femminil|f[ée]minine|damen|dames|female/i.test(_tBlob);
+    const isWomenEvent = /women|naiset|kvinn|kobiet|ladies|femenin|feminin|femminil|f[ée]minine|damen|dames|female|\bzeny\b/i.test(_tBlob);
      
     const _leagueLabel = (() => {
       const sel = document.getElementById("leagueSelect");
@@ -8557,14 +8697,6 @@ function bbPriceWhy(p) {
       return "no usable handicap price";
     }
     if (mk === "winner") return "SportyBet winner price not readable";
-    if (mk === "h2") {
-      var h2Line = bbStrictFinite(p.displayLineUsed) ? Number(p.displayLineUsed) : (bbStrictFinite(p.line) ? Number(p.line) : NaN);
-      var h2Markets = raw && Array.isArray(raw.markets) ? raw.markets.filter(function (m) { return bbSportyDescMatch(m, "h2", raw.homeTeamName || sl.home, raw.awayTeamName || sl.away); }) : [];
-      if (!h2Markets.length) return "SportyBet has no active 2H total market for this fixture";
-      var h2Lines = h2Markets.map(function (m) { var mt = /total=(-?[\d.]+)/.exec(String(m.specifier || "")); return mt ? Number(mt[1]) : NaN; }).filter(Number.isFinite);
-      if (Number.isFinite(h2Line) && !h2Lines.some(function (v) { return Math.abs(v - h2Line) < 1e-9; })) return "SportyBet has no 2H price at line " + h2Line;
-      return "2H market found, but active Over/Under prices could not be verified";
-    }
     return "SportyBet has no price at this line";
   } catch (_e) { return "no SportyBet price"; }
 }
@@ -8703,14 +8835,6 @@ function bbSportyResolveHandicapLine(markets, home, away, wantLine) {
   return { line: c0.line, specifier: c0.specifier, mid: c0.mid, over: null, under: null, oids: null, homePrice: c0.homePrice, awayPrice: c0.awayPrice, hids: c0.hids };
 }
 
-function bbSportyH2Plausible(line, ctx) {
-  var ft = ctx ? Number(ctx.ft) : NaN, h1 = ctx ? Number(ctx.h1) : NaN, v = Number(line);
-  if (!(ft > 0) || !Number.isFinite(v)) return true;
-  if (v < ft * 0.40 || v > ft * 0.58) return false;
-  if (h1 >= ft * 0.42 && h1 <= ft * 0.58) return Math.abs(v - (ft - h1)) <= Math.max(4, ft * 0.018);
-  return true;
-}
-
 function bbSportyResolveField(markets, f, home, away, want, ctx) {
   var kind = BB_SPORTY_KINDS[f[0]], isQx = String(f[0]).indexOf("__qx_") === 0;
    
@@ -8725,17 +8849,6 @@ function bbSportyResolveField(markets, f, home, away, want, ctx) {
 
     var _anchor = NaN;
      
-    if (!r && /^q[1-4]$/.test(kind)) {  
-      var _qn = kind.charAt(1);
-       
-      var _q236 = markets.filter(function (m) {
-        if (!m || String(m.id) !== "236") return false;
-        var _mq = /quarternr=(\d)/.exec(String(m.specifier || ""));
-        if (_mq ? _mq[1] !== _qn : !bbSportyDescMatch(m, kind, home, away)) return false;
-        return !bbSportyQxTeamish(m, home, away);
-      }).map(function (m) { return Object.assign({}, m, { id: "__q236_" + _qn, _rid: m.id }); });
-      r = bbSportyPickLine(_q236, "__q236_" + _qn, w, _anchor);
-    }
     var ids = isQx ? (BB_SPORTY_QX_IDS[kind] || []) : [f[0]];
     ids.forEach(function (id) { if (!r) r = bbSportyPickLine(markets, String(id), w, _anchor); });
     if (!r) (BB_SPORTY_ALT_IDS[f[0]] || []).forEach(function (alt) { if (!r) r = bbSportyPickLine(markets.filter(function (m) { return !(m.desc || m.name) || bbSportyDescMatch(m, kind, home, away); }), alt, w); });
@@ -8744,7 +8857,7 @@ function bbSportyResolveField(markets, f, home, away, want, ctx) {
       var byDesc = markets.filter(function (m) { return bbSportyDescMatch(m, kind, home, away); }).map(function (m) { return Object.assign({}, m, { id: "__desc_" + f[0], _rid: m.id }); });
       r = bbSportyPickLine(byDesc, "__desc_" + f[0], w, _anchor);
     }
-    if (r && (kind !== "h2" || bbSportyH2Plausible(r.line, ctx))) return r;
+    if (r) return r;
   }
   return null;
 }
@@ -8758,7 +8871,7 @@ function bbSportyParseEvent(data) {
     var _leagueForSporty = document.getElementById("leagueSelect")?.value || "";
     if (!bbSportyFieldAllowedForLeague(f[1], _leagueForSporty)) return;
     var r = bbSportyResolveField(markets, f, home, away, NaN, _ctx);
-    if (r) { out[f[2]] = { field: f, r: r }; if (f[2] === "FT total") _ctx.ft = Number(r.line); if (f[2] === "1H total") _ctx.h1 = Number(r.line); }
+    if (r) { out[f[2]] = { field: f, r: r }; if (f[2] === "FT total") _ctx.ft = Number(r.line); }
   });
   return out;
 }
@@ -8772,35 +8885,11 @@ function bbSportyQxNote(markets, parsed) {
   });
   seen.sort(function (x, y) { return x.split(":")[1].localeCompare(y.split(":")[1]); });
   try { window.__bbSportyQuarterMarkets = seen.slice(0, 40); } catch (_e) {}
-  hit.hq = !!(parsed && parsed["Highest Qtr"]); hit.lq = !!(parsed && parsed["Lowest Qtr"]);
-  [1, 2, 3, 4].forEach(function (n) { hit["q" + n] = !!(parsed && parsed["Q" + n + " total"]); });
+  hit.hq = !!(parsed && parsed["Highest Period"]); hit.lq = !!(parsed && parsed["Lowest Period"]);
+  ["P1", "P2", "P3", "OT"].forEach(function (lab, i) { hit["q" + (i + 1)] = !!(parsed && parsed[lab + " total"]); });
   if (hit.hq && hit.lq && hit.q1 && hit.q2 && hit.q3 && hit.q4) return "";
-  var miss = [!hit.q1 ? "Q1" : "", !hit.q2 ? "Q2" : "", !hit.q3 ? "Q3" : "", !hit.q4 ? "Q4" : "", !hit.hq ? "Highest" : "", !hit.lq ? "Lowest" : ""].filter(Boolean).join(" + ");
-  return " (" + miss + " quarter line not offered" + (seen.length ? "; quarter totals seen: " + seen.slice(0, 8).join("; ") : "") + ")";
-}
-
-function bbSportyQxSanity(parsed) {
-  var skipped = [], ft = parsed && parsed["FT total"] && Number(parsed["FT total"].r.line);
-  if (!(ft > 0)) return skipped;
-  var avg = ft / 4;
-
-  try {
-    var _h2e = parsed["2H total"], _h1e = parsed["1H total"];
-    if (_h2e && !bbSportyH2Plausible(_h2e.r.line, { ft: ft, h1: _h1e ? Number(_h1e.r.line) : NaN })) {
-      skipped.push("2H total " + _h2e.r.line + " (does not fit FT " + ft + (_h1e ? " minus 1H " + _h1e.r.line : "") + ")"); delete parsed["2H total"];
-    }
-  } catch (_h2e2) {}
-   
-  [["Q1 total", 0.6, 1.4], ["Q2 total", 0.6, 1.4], ["Q3 total", 0.6, 1.4], ["Q4 total", 0.6, 1.4], ["Highest Qtr", 0.95, 1.6], ["Lowest Qtr", 0.5, 1.05]].forEach(function (c) {
-    var e = parsed[c[0]]; if (!e) return; var ln = Number(e.r.line);
-    if (!(ln >= avg * c[1] && ln <= avg * c[2])) { skipped.push(c[0] + " " + ln); delete parsed[c[0]]; }
-  });
-   
-  if (parsed["Highest Qtr"] && parsed["Lowest Qtr"] && Number(parsed["Highest Qtr"].r.line) <= Number(parsed["Lowest Qtr"].r.line)) {
-    skipped.push("Highest " + parsed["Highest Qtr"].r.line + " / Lowest " + parsed["Lowest Qtr"].r.line + " (highest must be above lowest)");
-    delete parsed["Highest Qtr"]; delete parsed["Lowest Qtr"];
-  }
-  return skipped;
+  var miss = [!hit.q1 ? "P1" : "", !hit.q2 ? "P2" : "", !hit.q3 ? "P3" : "", !hit.q4 ? "OT" : "", !hit.hq ? "Highest" : "", !hit.lq ? "Lowest" : ""].filter(Boolean).join(" + ");
+  return " (" + miss + " period line not offered" + (seen.length ? "; period totals seen: " + seen.slice(0, 8).join("; ") : "") + ")";
 }
 
 function bbSportyEngineSidesReversed(sportyHome, sportyAway, engineA, engineB, hint) {
@@ -8856,7 +8945,6 @@ function bbSportyFill(parsed, clearMissingQx) {
   });
 
   var _leagueForFill = typeof normalizeLeagueKey === "function" ? normalizeLeagueKey(document.getElementById("leagueSelect")?.value || "") : String(document.getElementById("leagueSelect")?.value || "").toLowerCase();
-  if ((!clearMissingQx && !(parsed && parsed["2H total"]))) { var _h2el = document.getElementById("h2Market"); if (_h2el && String(_h2el.value || "") !== "") { _h2el.value = ""; _h2el.dispatchEvent(new Event("input", { bubbles: true })); _h2el.dispatchEvent(new Event("change", { bubbles: true })); } }
    
   if (clearMissingQx) BB_SPORTY_FIELDS.forEach(function (f) {  
     if (String(f[0]).indexOf("__qx_") !== 0 || (parsed && parsed[f[2]])) return;
@@ -8905,7 +8993,7 @@ async function bbFetchSportyLines() {
     var parsed = bbSportyParseEvent(j2.data);
     var _sideSwapped = bbSportyEngineSidesReversed(j2.data.homeTeamName || match.event.homeTeamName, j2.data.awayTeamName || match.event.awayTeamName, home, away, match.swapped);
     if (_sideSwapped) bbSportySwapParsedTeamFields(parsed);
-    var _qSk = bbSportyQxSanity(parsed), filled = bbSportyFill(parsed, true), _qn2 = ""; try { _qn2 = bbSportyQxNote(j2.data.markets || [], parsed); } catch (_qne) {}
+    var _qSk = [], filled = bbSportyFill(parsed, true), _qn2 = ""; try { _qn2 = bbSportyQxNote(j2.data.markets || [], parsed); } catch (_qne) {}
     try { var mem = JSON.parse(localStorage.getItem("BB_SPORTY_MATCHES") || "{}"); mem[match.memKey] = { home: match.event.homeTeamId, away: match.event.awayTeamId, eventId: match.event.eventId, at: Date.now() }; localStorage.setItem("BB_SPORTY_MATCHES", JSON.stringify(mem)); } catch (_e) {}
      
     bbSportyStatus("", false);
@@ -9181,12 +9269,12 @@ function bbSportyApply(result, opts) {
       if (v !== "" && Number.isFinite(Number(v))) want = Number(v);
     }
     var r = bbSportyResolveField(markets, f, _sportyHomeName, _sportyAwayName, want, _rctx);
-    if (r) { parsed[f[2]] = { field: writeField, r: r }; if (f[2] === "FT total") _rctx.ft = Number(r.line); if (f[2] === "1H total") _rctx.h1 = Number(r.line); }
+    if (r) { parsed[f[2]] = { field: writeField, r: r }; if (f[2] === "FT total") _rctx.ft = Number(r.line); }
   });
-  var _qSkip = []; try { _qSkip = bbSportyQxSanity(parsed); } catch (_qs) {}  
+  var _qSkip = [];  
   var filled = bbSportyFill(parsed, !opts.keepLines);
   var _qxNote = ""; try { _qxNote = bbSportyQxNote(markets, parsed); } catch (_qn) {}
-  if (_qSkip.length) _qxNote += " (skipped, not a combined quarter total: " + _qSkip.join("; ") + ")";
+  if (_qSkip.length) _qxNote += " (skipped, not a combined period total: " + _qSkip.join("; ") + ")";
    
   window.__bbSportyLast = {
     ok: true, eventId: result.event.eventId, filled: filled, at: Date.now(),
@@ -9390,7 +9478,7 @@ async function bbSportyGetBookingCode(base, code) {
 
 <script>
 /* Tuner / evidence-lock infrastructure. The parameter registry and grids are intentionally empty:
-   no basketball parameters are carried over; ice hockey parameters are added when a hockey model exists. */
+   no basketball parameters are carried over; parameters for the hockey model (ih-poisson-v1) are added here once there is enough settled data to calibrate them. */
 const TUNABLE_PARAM_REGISTRY = {};
 const MODEL_TUNING = {};
 const FIXED_BLEND = Object.freeze({});
@@ -10570,7 +10658,7 @@ function validateLockEvidence(evalResult, opts) {
     return {
       ok: false,
       reason:
-        "Overfit suspect (train−holdout gap " + ((evalResult.gap || 0) * 100).toFixed(1) + " pts)",
+        "Overfit suspect (train−holdout gap " + ((evalResult.gap || 0) * 100).toFixed(1) + " goals)",
     };
   }
    
@@ -12560,24 +12648,6 @@ function bbEdgeBucketForMarket(marketKey) {
 
 
 
-/* BACKTEST-RETUNE 2026-11-12 -----------------------------------------------------------------
-   Source: 11,917 settled event-markets (123 leagues, May 28 - Nov 10 2026), outcomes recomputed from
-   actual score vs line. Multipliers scale the league/market edge threshold already in
-   LEAGUE_EDGE_POINT_THRESHOLDS. A rule value of "off" would mean NO PLAY (none are set to off now). Set enabled:false to restore the old behaviour.
-   group -> tier A (NBA-class) | B | everything else ("other": tiers C, D, E and unknown leagues)       */
-function bbRetuneGroup(marketKey) {
-  const mk = String(marketKey || "").toLowerCase();
-  if (mk === "ft") return "ft";
-  if (mk === "h1") return "h1";
-  if (mk === "h2") return "h2";
-  if (mk === "team_a" || mk === "team_b") return "team";
-  if (mk === "h1_team_a" || mk === "h1_team_b") return "h1team";
-  if (/^q1_team_[ab]$/.test(mk)) return "q1team";
-  if (/^q[1-4]$/.test(mk)) return "qtr";
-  if (mk === "hq" || mk === "lq") return "qext";
-  if (mk === "handicap") return "handicap";
-  return null;
-}
  
  
 
@@ -13394,7 +13464,7 @@ const TRACKER_NETWORK_TIMEOUT_MS = BB_CONFIG.timeouts.fetch;
 
  
  
-const TRACKER_FIXED_USER_KEY = "THE_BET_CEO_KEY_H";
+const TRACKER_FIXED_USER_KEY = "THE_BET_CEO_KEY_H_ICEHOCKEY";
 
  
  
@@ -17749,10 +17819,9 @@ function validateLast10SeriesInputs() {
 function bbNoDataResultsHtml(reason, league) {
   const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const marketRows = [
-    ["FT Total", "ft"], ["1H Total", "h1"], ["2H Total", "h2"],
+    ["FT Total", "ft"],
     ["Team A Total", "team_a"], ["Team B Total", "team_b"],
-    ["Team A 1H", "h1_team_a"], ["Team B 1H", "h1_team_b"],
-    ["Team A Q1", "q1_team_a"], ["Team B Q1", "q1_team_b"],
+    ["Team A P1", "q1_team_a"], ["Team B P1", "q1_team_b"],
     ["P1 Total O/U", "q1"], ["P2 Total O/U", "q2"], ["P3 Total O/U", "q3"], ["OT Total O/U", "q4"],
     ["Highest Period O/U", "hq"], ["Lowest Period O/U", "lq"]
   ];
@@ -18516,33 +18585,6 @@ function bbAuditSelectableLeagueFormats() {
  
  
  
-function bbRepairWrong1HSettlements(active, archived) {
-  let n = 0;
-  const now = new Date().toISOString();
-   
-  [active, archived].forEach((list) => (Array.isArray(list) ? list : []).forEach((p) => {
-    if (!p) return;
-    const mk = String(p.marketKey || "").toLowerCase();
-    if (!/^(h1|h1_team_[ab])$/.test(mk)) return;
-    const st = String(p.resultStatus || "").toLowerCase();
-    if (!["win", "loss", "push"].includes(st)) return;
-    if (getLeagueRegulationPeriods(p.league) !== 4) return;
-    const txt = String(p.actualScore == null ? "" : p.actualScore).trim();
-    const pair = txt.match(/^(-?\d+(?:\.\d+)?)\s*[-:]\s*(-?\d+(?:\.\d+)?)$/);
-    const num = pair ? Number(pair[1]) + Number(pair[2]) : Number(txt);
-    const line = Number(p.line);
-    if (!Number.isFinite(num) || !Number.isFinite(line)) return;
-    if (num >= line * 0.75) return;
-    p.settleRepair = { at: now, previousStatus: p.resultStatus, previousScore: txt, reason: "1h_quarter_sum" };
-    p.resultStatus = "pending";
-    p.engineResultStatus = "pending";
-    delete p.actualScore; delete p.settledAt; delete p.settlementSource; delete p.gameScore;
-    p.updatedAt = now;
-    n++;
-  }));
-  if (n) { try { trackerDebug("reset wrongly settled 1H picks for re-grade", { count: n }); } catch (_d) {} }
-  return n;
-}
  
 function bbRepairImplausibleSettledPicks(active, archived) {
   let n = 0;
@@ -18576,7 +18618,6 @@ function normalizeTrackerState(raw) {
   const reconciled = reconcileTrackerBucketConflicts(normalizedActive, normalizedArchived);
   try { bbRestoreWronglyRepairedPicks(reconciled.activePicks, reconciled.archivedPicks); } catch (_rs) {}
   try { bbRepairImplausibleSettledPicks(reconciled.activePicks, reconciled.archivedPicks); } catch (_rp) {}
-  try { bbRepairWrong1HSettlements(reconciled.activePicks, reconciled.archivedPicks); } catch (_h1r) {}
    
   AppState.tracker.state = {
      
@@ -19732,6 +19773,19 @@ function bbLiveRemember(eid, comp) {
  
  
  
+// Display name for a league key: the option label ("Country — League") when the catalogue is loaded, else the cached catalogue.
+function bbLeagueDisplayName(key) {
+  const k = String(key || "");
+  try {
+    const o = document.querySelector('#leagueSelect option[value="' + k.replace(/"/g, '') + '"]');
+    if (o && o.textContent) return o.textContent.trim();
+    const c = JSON.parse(localStorage.getItem("BB_SR_HOCKEY_LEAGUES_V1") || "null");
+    const row = c && Array.isArray(c.rows) ? c.rows.find(function (r) { return "ih_" + r.id === k; }) : null;
+    if (row) return row.category + " — " + row.name;
+  } catch (_e) {}
+  return k;
+}
+
 function bbLiveEffectivePeriod(info) {
   const regP = getLeagueRegulationPeriods((info && info.league) || "");
   if (regP !== 2 && regP !== 4) return 0;
@@ -19760,7 +19814,7 @@ function bbLiveOvertimeLabel(overtimeNumber) {
 function bbLivePeriodRowLabel(periodIndex, regulationPeriods) {
   const i = Number(periodIndex), regP = Number(regulationPeriods);
   if (!Number.isInteger(i) || i < 0 || !Number.isInteger(regP) || regP < 1) return "";
-  if (i < regP) return `${regP === 2 ? "H" : "Q"}${i + 1}`;
+  if (i < regP) return `P${i + 1}`;
   return bbLiveOvertimeLabel(i - regP + 1);
 }
  
@@ -19768,13 +19822,13 @@ function bbLivePeriodTag(info) {
    
   const liveInfo = bbLiveNormalizeInfo(info);
   const regP = getLeagueRegulationPeriods((liveInfo && liveInfo.league) || "");
-  if (regP !== 2 && regP !== 4) return liveInfo && liveInfo.clock === "HALF" ? "HT" : "LIVE";
+  if (regP !== 3) return liveInfo && liveInfo.clock === "INT" ? "INT" : "LIVE";
   const p = bbLiveEffectivePeriod(liveInfo);
-  if (liveInfo && liveInfo.clock === "HALF") return "HT";
+  if (liveInfo && liveInfo.clock === "INT") return "INT";
   if (p <= 0) return "LIVE";
    
   if (p > regP) return bbLiveOvertimeLabel(p - regP);
-  return regP === 2 ? "H" + p : "Q" + p;
+  return "P" + p;
 }
 
  
@@ -19858,11 +19912,7 @@ function isCompetitionLive(status) {
     return { live: false, half: false };
   if (state === "pre" || name === "STATUS_SCHEDULED") return { live: false, half: false };
    
-  const half =
-    blob.includes("HALFTIME") ||
-    blob.includes("HALF TIME") ||
-    blob.includes("HALF-TIME") ||
-    /\bHT\b/.test(blob);
+  const half = /INTERMISSION|END[ _]PERIOD|\bPAUSE\b/.test(blob);
    
   const breakish =
     half ||
@@ -19998,7 +20048,7 @@ async function _pollLiveGameClocksImpl() {
     if (!(window.isIceHockeyLeague && window.isIceHockeyLeague(league))) return;
      
     try {
-      const events = await bbLiveFetchSofaEvents(Array.from(eventIds));
+      const events = await bbLiveFetchHockeyEvents(Array.from(eventIds));
       if (!events.length) return;
       events.forEach((ev) => {
         const eid = String(ev.id || "");
@@ -21399,8 +21449,8 @@ function renderTrackedPicks() {
           const isZombie = gameTs > 0 && Date.now() - gameTs > 36 * 60 * 60 * 1000;
            
           const _liveClockLabel = _liveInfo
-            ? _liveInfo.clock === "HALF"
-              ? "HALF"
+            ? _liveInfo.clock === "INT"
+              ? "INT"
               : (() => {
                    
                   const _pLabel = bbLivePeriodTag(_liveInfo);
@@ -21493,7 +21543,7 @@ function renderTrackedPicks() {
         return `
       <tr>
         <td>${safeText(formatTrackedDate(p.eventDate || p.createdAt))}</td>
-        <td style="font-weight:800; text-transform:uppercase; font-size:10px;">${safeText(String(p.league || "—").toUpperCase())}</td>
+        <td style="font-weight:800; text-transform:uppercase; font-size:10px;">${safeText(String(bbLeagueDisplayName(p.league) || "—").toUpperCase())}</td>
         <td style="font-weight:900; text-transform:uppercase;">${safeText((p.homeTeam && p.homeTeam !== "—" ? p.homeTeam : "A") + " vs " + (p.awayTeam && p.awayTeam !== "—" ? p.awayTeam : "B"))}</td>
         <td style="font-weight:800;">${safeText(
           String(p.marketName || "—")
@@ -21649,7 +21699,7 @@ function renderHealthDashboardPanel() {
         <div class="tracker-summary-cell ${overallGood ? "primary" : ""}">
           <div class="tracker-summary-label">Overall Status</div>
           <div class="tracker-summary-value">${safeText(String(overallStatus).toUpperCase())}</div>
-          <div class="tracker-summary-sub">${snap.league ? safeText(snap.league.toUpperCase()) : "No league selected"}</div>
+          <div class="tracker-summary-sub">${snap.league ? safeText(String(bbLeagueDisplayName(snap.league)).toUpperCase()) : "No league selected"}</div>
         </div>
         <div class="tracker-summary-cell">
           <div class="tracker-summary-label">Recent Errors</div>
@@ -21670,7 +21720,7 @@ function renderHealthDashboardPanel() {
       <div class="tracker-analytics-section">
         <div class="tracker-analytics-section-head">
           <div class="tracker-analytics-section-title">Recent Win Rate Drift</div>
-          <div class="tracker-analytics-section-meta">${snap.league ? safeText(snap.league.toUpperCase()) : "—"}</div>
+          <div class="tracker-analytics-section-meta">${snap.league ? safeText(String(bbLeagueDisplayName(snap.league)).toUpperCase()) : "—"}</div>
         </div>
         <div class="tracker-analytics-section-body">
           ${
@@ -21685,7 +21735,7 @@ function renderHealthDashboardPanel() {
               <div class="tracker-mini-stat">
                 <div class="name">Last 10 Win Rate</div>
                 <div class="value">${formatPctLocal(snap.modelHealth.recentWinRate)}</div>
-                <div class="sub">Drift: ${snap.modelHealth.drift >= 0 ? "+" : ""}${(snap.modelHealth.drift * 100).toFixed(1)} pts</div>
+                <div class="sub">Drift: ${snap.modelHealth.drift >= 0 ? "+" : ""}${(snap.modelHealth.drift * 100).toFixed(1)} goals</div>
               </div>
             </div>
           `
@@ -21928,8 +21978,6 @@ function renderTrackerAnalytics() {
      
     const map = {
       ft: "FT Total",
-      h1: "1H Total",
-      h2: "2H Total",
       handicap: "FT Handicap",
       team_a: "Team A Total",
       team_b: "Team B Total",
@@ -23115,8 +23163,7 @@ function manualSettlePeriodLabel(pick) {
 
   if (/^q[1-4]$/.test(mk)) return (mk === "q4" ? "overtime goals only" : "period " + mk.charAt(1) + " only, NO overtime");
   if (mk === "hq" || mk === "lq") return "regulation periods only, NO overtime";
-  const per = typeof bbScPeriodOfMarket === "function" ? bbScPeriodOfMarket(pick && pick.marketKey) : "ft";
-  return { ft: "full time incl. overtime", h1: "1st half" }[per] || "full time incl. overtime";
+  return "full time incl. overtime";
 }
 
  
@@ -24005,8 +24052,8 @@ function settlePendingPicksFromCompetition(eventId, competition, gameFinal) {
     : { half: false };
    
   const isHalf = !!_liveMetaHalf.half ||
-    String(statusName).toUpperCase().includes("HALFTIME") ||
-    String(competition?.status?.type?.description || "").toUpperCase().includes("HALFTIME");
+    /INTERMISSION|END[ _]PERIOD|PAUSE/.test(String(statusName).toUpperCase()) ||
+    /INTERMISSION|PAUSE/.test(String(competition?.status?.type?.description || "").toUpperCase());
    
   const completed = !bbCompetitionNotPlayed(competition?.status) && !!(gameFinal || bbIsCompetitionFinalStatus(competition));
    
@@ -24080,69 +24127,10 @@ function bbSettleScoresFromCompetition(pick, competition, allowPartialSettlement
   const away = comps.find((c) => c.homeAway === "away") || comps[1];
   if (!home || !away) return null;
   const ftH = bbSettleNum(home.score), ftA = bbSettleNum(away.score);
-  const lsH = Array.isArray(home.linescores) ? home.linescores : [];
-  const lsA = Array.isArray(away.linescores) ? away.linescores : [];
-  let h1H = NaN, h1A = NaN;
-   
-   
-  const regP = typeof getLeagueRegulationPeriods === "function"
-    ? getLeagueRegulationPeriods(pick && pick.league)
-    : getLeagueRegulationPeriods(pick && pick.league || "");
-   
   const _eligibility = getLeagueMarketEligibility(pick && pick.league || "", pick && pick.marketKey || "");
   if (!_eligibility.playable) return null;
-  const status = competition && competition.status;
-  const period = Number(status && status.period || 0);
-   
-  const halfInfo = typeof isCompetitionLive === "function"
-    ? isCompetitionLive(status)
-    : { half: /HALFTIME|HALF TIME|\bHT\b/i.test(String(status && (status.type?.name || status.type?.description) || "")) };
-  const statusText = [status?.type?.name, status?.type?.description, status?.type?.shortDetail, status?.displayClock].filter(Boolean).join(" ");
-   
-   
-  const h1PeriodComplete = !!allowPartialSettlement && isPickPeriodComplete(
-    pick && pick.marketKey, period, !!halfInfo.half, false, regP, status?.displayClock, statusText
-  );
-   
-  if (lsH.length === lsA.length && lsH.length >= 1) {
-     
-    if (regP === 2) {
-       
-      h1H = bbSettleNum(lsH[0]);
-      h1A = bbSettleNum(lsA[0]);
-    }   else if (regP === 4 && (lsH.length >= 4 || (h1PeriodComplete && lsH.length >= 2))) {
-       
-      const q1H = bbSettleNum(lsH[0]), q2H = bbSettleNum(lsH[1]);
-      const q1A = bbSettleNum(lsA[0]), q2A = bbSettleNum(lsA[1]);
-       
-      if ([q1H, q2H, q1A, q2A].every(Number.isFinite)) {
-        h1H = q1H + q2H;
-        h1A = q1A + q2A;
-      }
-    }   else if (regP === 4 && h1PeriodComplete && period === 2 && lsH.length === 1) {
-       
-      const q1H = bbSettleNum(lsH[0]), q1A = bbSettleNum(lsA[0]);
-       
-      if (Number.isFinite(ftH) && Number.isFinite(ftA) && Number.isFinite(q1H) && Number.isFinite(q1A) && ftH >= q1H && ftA >= q1A) {
-        h1H = ftH;
-        h1A = ftA;
-      }
-    }
-  }
-  if (!Number.isFinite(h1H) || !Number.isFinite(h1A)) { h1H = NaN; h1A = NaN; }
   const final = bbIsCompetitionFinalStatus(competition);
-   
-  let h2H = NaN, h2A = NaN;
-  if (final && lsH.length === lsA.length) {
-    if (regP === 4 && lsH.length >= 4) {
-      const q3H = bbSettleNum(lsH[2]), q4H = bbSettleNum(lsH[3]);
-      const q3A = bbSettleNum(lsA[2]), q4A = bbSettleNum(lsA[3]);
-      if ([q3H, q4H, q3A, q4A].every(Number.isFinite)) { h2H = q3H + q4H; h2A = q3A + q4A; }
-    } else if (regP === 2 && lsH.length >= 2) {
-      h2H = bbSettleNum(lsH[1]); h2A = bbSettleNum(lsA[1]);
-    }
-  }
-  return { ftH, ftA, h1H, h1A, h2H, h2A, final };
+  return { ftH, ftA, final };
 }
 
  
@@ -24162,6 +24150,25 @@ function bbPeriodTotalsFromLinescores(lsHome, lsAway, getVal) {
   const oh = getVal(lsHome[3]), oa = getVal(lsAway[3]);
   totals.push(Number.isFinite(oh) && Number.isFinite(oa) ? oh + oa : 0);
   return totals;
+}
+
+// Regulation-time goals (three 20-minute periods). Falls back to the final score only when the game did not go to overtime.
+function bbRegulationGoals(competition) {
+  const comps = (competition && competition.competitors) || [];
+  const home = comps.find((c) => c.homeAway === "home") || comps[0];
+  const away = comps.find((c) => c.homeAway === "away") || comps[1];
+  if (!home || !away) return null;
+  const val = (x) => { const raw = x && typeof x === "object" ? (x.value != null ? x.value : x.displayValue) : x; const n = parseFloat(raw); return Number.isFinite(n) && n >= 0 ? n : NaN; };
+  const lh = Array.isArray(home.linescores) ? home.linescores : [], la = Array.isArray(away.linescores) ? away.linescores : [];
+  if (lh.length >= 3 && la.length >= 3) {
+    const h = [0, 1, 2].map((i) => val(lh[i])), a = [0, 1, 2].map((i) => val(la[i]));
+    if (h.every(Number.isFinite) && a.every(Number.isFinite)) return { h: h[0] + h[1] + h[2], a: a[0] + a[1] + a[2] };
+  }
+  const st = competition && competition.status && competition.status.type || {};
+  const wentOT = /FINAL_(OT|SO)/.test(String(st.name || "")) || /overtime|penalt|shootout/i.test(String(st.description || ""));
+  const fh = val(home.score), fa = val(away.score);
+  if (!wentOT && Number.isFinite(fh) && Number.isFinite(fa)) return { h: fh, a: fa };
+  return null;
 }
 
 function bbPeriodGoalsFromCompetition(competition) {
@@ -24276,12 +24283,6 @@ function bbScNameMatch(pickName, comp) {
 }
  
  
-function bbScPeriodOfMarket(mk) {
-  const key = String(mk || "").toLowerCase();
-  if (key === "h1" || key.startsWith("h1_")) return "h1";
-  if (key === "h2") return "h2";
-  return "ft";
-}
 
  
  
@@ -24300,32 +24301,9 @@ function bbPeriodScorelineForPick(pick, competition, allowPartialSettlement = fa
   };
   const lsH = Array.isArray(home.linescores) ? home.linescores : [];
   const lsA = Array.isArray(away.linescores) ? away.linescores : [];
-  const per = bbScPeriodOfMarket(pick.marketKey);
-  const sumIdx = (ls, idx) => idx.reduce((s, i) => s + val(ls[i]), 0);
+  const per = "ft";
   let h = NaN, a = NaN;
-   
-  if (per === "ft") { h = val(home.score); a = val(away.score); }
-  else if (per === "h2") {
-    const authoritative = typeof bbSettleScoresFromCompetition === "function" ? bbSettleScoresFromCompetition(pick, competition, false) : null;
-    if (authoritative && authoritative.final && Number.isFinite(authoritative.h2H) && Number.isFinite(authoritative.h2A)) { h = authoritative.h2H; a = authoritative.h2A; }
-  }
-   
-  else if (per === "h1" && lsH.length === lsA.length) {
-     
-    const authoritative = typeof bbSettleScoresFromCompetition === "function"
-      ? bbSettleScoresFromCompetition(pick, competition, !!allowPartialSettlement)
-      : null;
-     
-    if (authoritative && Number.isFinite(authoritative.h1H) && Number.isFinite(authoritative.h1A)) {
-      h = authoritative.h1H;
-      a = authoritative.h1A;
-    }   else if (typeof bbSettleScoresFromCompetition !== "function") {
-      const regP = typeof getLeagueRegulationPeriods === "function" ? getLeagueRegulationPeriods(pick && pick.league) : null;
-       
-      if (regP === 2) { h = val(lsH[0]); a = val(lsA[0]); }
-      else if (regP === 4 && lsH.length >= 4) { h = sumIdx(lsH, [0, 1]); a = sumIdx(lsA, [0, 1]); }
-    }
-  }
+  h = val(home.score); a = val(away.score);
   if (!Number.isFinite(h) || !Number.isFinite(a)) return null;
 
   let aIsHome = null, orientation = "unresolved";
@@ -24385,12 +24363,12 @@ function _settleTrackedPickFromCompetitionCore(pick, competition, allowPartialSe
   if (!home || !away) return "pending";
    
   if (allowPartialSettlement && !completed) {
-    if (["h2", "handicap"].includes(String(pick.marketKey || "").toLowerCase())) return "pending";
+    if (["handicap"].includes(String(pick.marketKey || "").toLowerCase())) return "pending";
     const _curPeriod = Number(competition?.status?.period || 0);
      
     const _liveMeta = typeof isCompetitionLive === "function"
       ? isCompetitionLive(competition && competition.status)
-      : { half: String(status).toUpperCase().includes("HALFTIME") };
+      : { half: /INTERMISSION|END[ _]PERIOD|PAUSE/.test(String(status).toUpperCase()) };
      
     const _feedRegP = getLeagueRegulationPeriods(pick.league);
      
@@ -24423,42 +24401,6 @@ function _settleTrackedPickFromCompetitionCore(pick, competition, allowPartialSe
   if (completed && (!Number.isFinite(sHome) || !Number.isFinite(sAway))) return "pending";
   let lsHome = home.linescores || [];
   let lsAway = away.linescores || [];
-  let h1Home = NaN, h1Away = NaN;
-   
-   
-   
-  if (lsHome.length === lsAway.length && lsHome.length >= 1) {
-     
-    const _regP = getLeagueRegulationPeriods(pick.league);
-     
-    if (_regP === 2) {
-       
-      h1Home = getVal(lsHome[0]);
-      h1Away = getVal(lsAway[0]);
-     
-    }   else if (_regP === 4 && (lsHome.length >= 4 || (allowPartialSettlement && lsHome.length >= 2))) {
-       
-      const _q1Home = getVal(lsHome[0]), _q2Home = getVal(lsHome[1]);
-      const _q1Away = getVal(lsAway[0]), _q2Away = getVal(lsAway[1]);
-       
-      if ([_q1Home, _q2Home, _q1Away, _q2Away].every(Number.isFinite)) {
-        h1Home = _q1Home + _q2Home;
-        h1Away = _q1Away + _q2Away;
-      }
-    }   else if (_regP === 4 && allowPartialSettlement && Number(competition?.status?.period || 0) === 2 && lsHome.length === 1) {
-       
-       
-      if (Number.isFinite(sHome) && Number.isFinite(sAway)) {
-        h1Home = sHome;
-        h1Away = sAway;
-      }
-    }   else if (_regP !== 2 && _regP !== 4 && lsHome.length >= 2) {
-       
-      h1Home = NaN;
-      h1Away = NaN;
-    }
-    if (!Number.isFinite(h1Home) || !Number.isFinite(h1Away)) { h1Home = NaN; h1Away = NaN; }
-  }
   const market = pick.marketKey;
   const marketLine = bbStrictFinite(pick.line) ? Number(pick.line) : NaN;
    
@@ -24511,22 +24453,26 @@ function _settleTrackedPickFromCompetitionCore(pick, competition, allowPartialSe
         const _f = (v) => (Number.isFinite(v) ? v : null);
          
         pick.gameScore = isTeamAHome
-          ? { a: sHome, b: sAway, h1a: _f(h1Home), h1b: _f(h1Away) }
-          : { a: sAway, b: sHome, h1a: _f(h1Away), h1b: _f(h1Home) };
+          ? { a: sHome, b: sAway }
+          : { a: sAway, b: sHome };
       }
     }
   } catch (_gs) {}
    
   if (market === "ft") {
-    actual = sHome + sAway;
+    const _rg = bbRegulationGoals(competition);
+    if (!_rg) return "pending";
+    actual = _rg.h + _rg.a;
   }   else if (market === "winner") {
      
-    if (sHome === sAway) {
+    // A shootout can leave the scoreboard level; the feed's winner flag then decides.
+    const _tieWinner = sHome === sAway ? (home.winner === true ? "home" : away.winner === true ? "away" : null) : null;
+    if (sHome === sAway && !_tieWinner) {
       pick.actualScore = "Tie";
       pick.engineResultStatus = "push";
       return "push";
     }
-    const actualWinnerSide = sHome > sAway ? "home" : "away";
+    const actualWinnerSide = _tieWinner || (sHome > sAway ? "home" : "away");
     const predTxt = String(pick.predictionText || "").trim();
      
     const pickedHomeAtCreation =
@@ -24577,23 +24523,6 @@ function _settleTrackedPickFromCompetitionCore(pick, competition, allowPartialSe
     pick.actualScore = actualWinnerSide === "home" ? "Home" : "Away";
     pick.engineResultStatus = isWin ? "win" : "loss";
     return isWin ? "win" : "loss";
-  }   else if (market === "h1") {
-    if (!Number.isFinite(h1Home) || !Number.isFinite(h1Away)) return "pending";
-    actual = h1Home + h1Away;
-  } else if (market === "h2") {
-    if (!completed) return "pending";
-     
-    const _h2Periods = getLeagueRegulationPeriods(pick.league);
-    let h2Home = NaN, h2Away = NaN;
-    if (lsHome.length === lsAway.length && _h2Periods === 4 && lsHome.length >= 4) {
-      const q3Home = getVal(lsHome[2]), q4Home = getVal(lsHome[3]);
-      const q3Away = getVal(lsAway[2]), q4Away = getVal(lsAway[3]);
-      if ([q3Home, q4Home, q3Away, q4Away].every(Number.isFinite)) { h2Home = q3Home + q4Home; h2Away = q3Away + q4Away; }
-    } else if (lsHome.length === lsAway.length && _h2Periods === 2 && lsHome.length >= 2) {
-      h2Home = getVal(lsHome[1]); h2Away = getVal(lsAway[1]);
-    }
-    if (!Number.isFinite(h2Home) || !Number.isFinite(h2Away) || h2Home < 0 || h2Away < 0) return "pending";
-    actual = h2Home + h2Away;
   } else if (market === "handicap") {
     if (!completed || !_teamASide || !Number.isFinite(sHome) || !Number.isFinite(sAway) || !Number.isFinite(marketLine)) return "pending";
     const teamAMargin = isTeamAHome ? sHome - sAway : sAway - sHome;
@@ -24624,23 +24553,19 @@ function _settleTrackedPickFromCompetitionCore(pick, competition, allowPartialSe
     return isWin ? "win" : "loss";
   }   else if (market === "team_a") {
     if (!_teamASide) return "pending";
-    actual = isTeamAHome ? sHome : sAway;
+    const _rg = bbRegulationGoals(competition);
+    if (!_rg) return "pending";
+    actual = isTeamAHome ? _rg.h : _rg.a;
     if (!Number.isFinite(actual)) return "pending";
   }   else if (market === "team_b") {
     if (!_teamASide) return "pending";
-    actual = isTeamAHome ? sAway : sHome;
+    const _rg = bbRegulationGoals(competition);
+    if (!_rg) return "pending";
+    actual = isTeamAHome ? _rg.a : _rg.h;
     if (!Number.isFinite(actual)) return "pending";
-  }   else if (market === "h1_team_a") {
-    if (!_teamASide) return "pending";
-    if (!Number.isFinite(h1Home) || !Number.isFinite(h1Away)) return "pending";
-    actual = isTeamAHome ? h1Home : h1Away;
-  }   else if (market === "h1_team_b") {
-    if (!_teamASide) return "pending";
-    if (!Number.isFinite(h1Home) || !Number.isFinite(h1Away)) return "pending";
-    actual = isTeamAHome ? h1Away : h1Home;
   } else if (market === "q1_team_a" || market === "q1_team_b") {
      
-    if (getLeagueRegulationPeriods(pick.league) !== 4 || !_teamASide || !Array.isArray(lsHome) || !Array.isArray(lsAway) || lsHome.length < 1 || lsAway.length < 1) return "pending";
+    if (getLeagueRegulationPeriods(pick.league) !== 3 || !_teamASide || !Array.isArray(lsHome) || !Array.isArray(lsAway) || lsHome.length < 1 || lsAway.length < 1) return "pending";
     const _q1Home = getVal(lsHome[0]), _q1Away = getVal(lsAway[0]);
     if (![ _q1Home, _q1Away ].every(Number.isFinite) || _q1Home < 0 || _q1Away < 0) return "pending";
     if (market === "q1_team_a") actual = isTeamAHome ? _q1Home : _q1Away;
@@ -24657,17 +24582,6 @@ function _settleTrackedPickFromCompetitionCore(pick, competition, allowPartialSe
       if (!_qt) return "pending";
       actual = /^q[1-4]$/.test(market) ? _qt[Number(market.charAt(1)) - 1] : market === "hq" ? Math.max.apply(null, _qt.slice(0, 3)) : Math.min.apply(null, _qt.slice(0, 3));
     }
-  }   else if (market === "htft") {
-    if (!_teamASide || (!bbStrictFinite(h1Home) || !bbStrictFinite(h1Away) || (h1Home === 0 && h1Away === 0))) return "pending";
-    const _hf = bbTeamAIsAway;
-    const _h1H = _hf ? h1Away : h1Home, _h1A = _hf ? h1Home : h1Away, _fH = _hf ? sAway : sHome, _fA = _hf ? sHome : sAway;
-    const h1Lead = _h1H > _h1A ? "Home" : _h1H < _h1A ? "Away" : "Tie";
-    const ftLead = _fH > _fA ? "Home" : _fH < _fA ? "Away" : "Tie";
-    const actualStr = (h1Lead + "/" + ftLead).toUpperCase();
-    pick.actualScore = actualStr;
-    const isWin = actualStr === String(pick.predictionText).toUpperCase();
-    pick.engineResultStatus = isWin ? "win" : "loss";
-    return isWin ? "win" : "loss";
   }   else if (market === "margin_any" || market === "margin_team") {
     const diff = Math.abs(sHome - sAway);
     const actualWinnerFeedSide = sHome > sAway ? "home" : sAway > sHome ? "away" : "tie";
@@ -24870,8 +24784,8 @@ async function refreshTrackedPickResults() {
       const eventResults = await Promise.all(
         eventEntries.map((entry) => _rdPool(async () => {
           let competition = null;
-          try { competition = await fetchSofaHockeyCompetitionForEvent(entry.eventId); } catch (_eSofa) { competition = null; }
-          return [_hockeyKey(entry.league, entry.eventId), competition ? { header: { competitions: [competition] }, _sofascore: true } : null];
+          try { competition = await fetchHockeyCompetitionForEvent(entry.eventId); } catch (_eSofa) { competition = null; }
+          return [_hockeyKey(entry.league, entry.eventId), competition ? { header: { competitions: [competition] }, _hockeyFeed: true } : null];
         })),
       );
       const eventMap = new Map(eventResults);
@@ -25557,19 +25471,7 @@ function bbMaskAdvancedByDate(values, dates, cutoff) {
  
  
 
-function bbAdvSeries(ctx, key) {
-   
-  try {
-    const r = getPeriodAdvancedSeries(ctx, "ft");
-    const k = key === "ortg10" ? "ortg" : key === "drtg10" ? "drtg" : "pace";
-    return Array.isArray(r[k]) ? r[k] : [];
-  } catch (_e) { return []; }
-}
  
-function getPeriodAdvancedSeries(_ctx, marketKey) {
-   
-  return { ortg: [], drtg: [], pace: [], source: "disabled", periodNative: false, marketKey: String(marketKey || "ft").toLowerCase() };
-}
  
 
  
@@ -26335,16 +26237,9 @@ function formatFixtureTime(dateStr) {
  
  
 async function fetchLeagueTeamCatalog(league, searchQuery = "") {
-   
-  const lk = (typeof normalizeLeagueKey === "function" ? normalizeLeagueKey(league || "") : String(league || "").toLowerCase().trim());
   if (/^ih_/.test(String(league || ""))) {
-    const q = String(searchQuery || "").trim();
-    if (q.length < 2) return [];
-    const url = "https://api.sofascore.com/api/v1/search/teams?q=" + encodeURIComponent(q) + "&sport=ice-hockey";
-    const payload = await proxyFetch(url, 10000);
-    return ssCollectSearchTeams(payload).filter(function (t) { return !!t.id && !!t.name; }).sort(function (a,b) { return (b.score || 0) - (a.score || 0) || a.name.localeCompare(b.name); }).slice(0, 20);
+    return await window.srHockeyTeamsForLeague(searchQuery);
   }
-   
   return [];
 }
 
@@ -26605,7 +26500,7 @@ function bbClassifyInjuryStatus(inj) {
    
   const OUT = new Set(["out", "out for season", "out indefinitely", "injured reserve", "ir", "suspension", "suspended",
     "not with team", "inactive", "pregnancy", "maternity", "maternity leave"]);
-  const AWAY = new Set(["national team", "national team duty", "fiba", "world cup", "international duty"]);
+  const AWAY = new Set(["national team", "national team duty", "iihf", "world cup", "international duty"]);
   const DTD = new Set(["questionable", "doubtful", "day to day", "daytoday"]);
    
   for (const c of cands) {
@@ -27726,7 +27621,7 @@ function humanizeNoPlayReason(p) {
   }
    
   if (/^edge /i.test(raw) && raw.indexOf("< threshold") >= 0) {
-    return "Blocked by the point-threshold gate: " + raw + ".";
+    return "Blocked by the goal-threshold gate: " + raw + ".";
   }
    
   if (/range width|market range gate/i.test(raw)) {
@@ -27788,18 +27683,13 @@ function getMarketKeyFromName(name, marketKeyOverride) {
   const n = String(name || "");
   if (n.startsWith("Winner & Total")) return "w_ou";
   if (n.startsWith("Race to")) return "race";
-  if (n.startsWith("1H Individual")) return "h1_teams";
   if (n.startsWith("FT Total")) return "ft";
-  if (n.startsWith("1H Total")) return "h1";
-  if (n.startsWith("2H Total")) return "h2";
   if (n.startsWith("Team A Total")) return "team_a";
   if (n.startsWith("Team B Total")) return "team_b";
-  if (n.startsWith("Team A 1H")) return "h1_team_a";
-  if (n.startsWith("Team B 1H")) return "h1_team_b";
-  if (n.startsWith("Team A Q1")) return "q1_team_a";
-  if (n.startsWith("Team B Q1")) return "q1_team_b";
-  if (n.startsWith("Highest Period") || n.startsWith("Highest Quarter")) return "hq";  
-  if (n.startsWith("Lowest Period") || n.startsWith("Lowest Quarter")) return "lq";
+  if (n.startsWith("Team A P1")) return "q1_team_a";
+  if (n.startsWith("Team B P1")) return "q1_team_b";
+  if (n.startsWith("Highest Period") || n.startsWith("Highest Period")) return "hq";  
+  if (n.startsWith("Lowest Period") || n.startsWith("Lowest Period")) return "lq";
   { const _qm = /^Q([1-4]) (Total|O\/U)/.exec(n); if (_qm) return "q" + _qm[1]; }
   if (n.startsWith("HT/FT")) return "htft";
   if (n.startsWith("Winning Margin (Team)")) return "margin_team";
@@ -27832,16 +27722,10 @@ function getMarketKeyFromName(name, marketKeyOverride) {
 
  
  
-function validateAdvancedObservationAlignment(_ctx, _marketKey, sideLabel) {
-  return { ok: false, reason: String(sideLabel || "Team") + ": advanced rating/pace features are disabled", datesChecked: false, series: { ortg: [], drtg: [], pace: [], source: "disabled" } };
-}
  
 
  
  
-function getAdvancedStatsEligibility(_league, _ctxA, _ctxB, marketKey = "ft", _contextRoot = null) {
-  return { eligible: false, reason: "Advanced ratings and pace are disabled in the prediction engine", market: String(marketKey || "ft").toLowerCase(), counts: { aOrtg: 0, aDrtg: 0, bOrtg: 0, bDrtg: 0, paceA: 0, paceB: 0 } };
-}
  
 
  
@@ -28351,7 +28235,7 @@ function bbTmBackfillCandidates(picks, attempted, now) {
  
 async function bbTmFetchCompetition(league, eventId) {
   if (!(window.isIceHockeyLeague && window.isIceHockeyLeague(league))) return null;
-  return await fetchSofaHockeyCompetitionForEvent(eventId);
+  return await fetchHockeyCompetitionForEvent(eventId);
 }
 
  
@@ -28994,18 +28878,6 @@ function scrollResultsIntoViewNow(table) {
  
  
 
-async function runEngine() {
-  if (window.__engineRunInProgress) return { ok: false, reason: "run-in-progress" };
-  const runBtn = document.getElementById("runBtn");
-  if (runBtn) runBtn.disabled = false;
-  const message = "No ice hockey prediction model is installed yet. League, fixture and team data are connected.";
-  try { setStatusText(message, "err"); } catch (_e) {
-    const status = document.getElementById("status");
-    if (status) status.textContent = message;
-  }
-  try { engineDebug("runEngine: no ice hockey prediction model installed", { sport: "ice-hockey" }); } catch (_e2) {}
-  return { ok: false, sport: "ice-hockey", reason: "hockey-model-not-installed" };
-}
 
 async function bbRunEngineImpl() {
   return runEngine();
@@ -30846,9 +30718,8 @@ const fixtureSelect = document.getElementById("fixtureSelect");
    
   function marketLabel(b, g) {
     var m = String(b && b.market || ""), mk = String(b && b.marketKey || "").toLowerCase(), h = (g && g.home) || "Home", a = (g && g.away) || "Away";
-    if (mk === "h2") return "2H Total";
     if (mk === "handicap") return "FT Handicap";
-    if (mk === "team_a" || mk === "h1_team_a") return (mk === "h1_team_a" ? "1H " : "") + h + " Total";
+    if (mk === "team_a" || mk === "h1_team_a") return h + " Total";
     if (mk === "team_b" || mk === "h1_team_b") return (mk === "h1_team_b" ? "1H " : "") + a + " Total";
     return m.replace(/\bTeam A\b/g, h).replace(/\bTeam B\b/g, a);
   }
@@ -30903,7 +30774,7 @@ const fixtureSelect = document.getElementById("fixtureSelect");
     var t = tournament || {}, nz = function (x) { return String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); };
     var name = nz(t.name); if (!name || !Array.isArray(options) || !options.length) return null;
     var cat = nz(t.category && typeof t.category === "object" ? t.category.name : (t.categoryName || t.category || t.country || ""));
-    if (!cat && t.sport && nz(t.sport) !== "basketball") cat = nz(t.sport);
+    if (!cat && t.sport && nz(t.sport) !== "icehockey") cat = nz(t.sport);
     var opts = options.map(function (o) {
       var raw = String(o.t || ""), i = raw.indexOf(" - "), full = nz(raw), lg = i >= 0 ? nz(raw.slice(i + 3)) : full, co = i >= 0 ? nz(raw.slice(0, i)) : "";
       return { v: o.v, full: full, lg: lg, co: co };
@@ -31134,7 +31005,6 @@ const fixtureSelect = document.getElementById("fixtureSelect");
       var reverse = typeof bbStrictTeamNameMatch === "function" && bbStrictTeamNameMatch(g.home, da) && bbStrictTeamNameMatch(g.away, dh);
       if (!direct && !reverse) return { ok: false, noLines: false, reason: "SportyBet fixture teams do not match the selected game" };
       var parsed = bbSportyParseEvent(result.data);
-      try { if (typeof bbSportyQxSanity === "function") bbSportyQxSanity(parsed); } catch (_qx) {}
       var hasLine = Object.keys(parsed || {}).some(function (k) {
         var r = parsed[k] && parsed[k].r;
         if (!r || r.line == null || String(r.line).trim() === "") return false;
@@ -31307,7 +31177,6 @@ const fixtureSelect = document.getElementById("fixtureSelect");
         markets: data.markets.map(function (m) { return { id: m && m.id, specifier: m && m.specifier, status: m && m.status, desc: (m && (m.desc || m.name)) || "", outcomes: compact(m) }; })
       };
       var parsed = bbSportyParseEvent(ld);
-      try { if (typeof bbSportyQxSanity === "function") bbSportyQxSanity(parsed); } catch (e1) {}
       var out = {}, n = 0;
       Object.keys(parsed || {}).forEach(function (k) {
         var r = parsed[k] && parsed[k].r; if (!r || !isFinite(Number(r.line))) return;
@@ -32312,7 +32181,7 @@ function bindMulti() {
    
   function runReverseIntelligence() {
     var el = document.getElementById("apReverseStatus") || document.getElementById("apStatus");
-    var msg = "Reverse Intelligence needs an ice hockey prediction model, and none is installed yet. SportyBet booking-code lookup is available once the worker serves ice hockey.";
+    var msg = "Reverse Intelligence has not been built for the ice hockey model yet. Booking-code lookup needs the SportyBet worker to serve ice hockey.";
     if (el) el.textContent = msg;
   }
   function bind() {
@@ -32469,7 +32338,7 @@ function bindMulti() {
     return { hits: hits, pushes: pushes, used: rows.length, required: 7 };
   }
   function apRIMarketLabel(key) {
-    return ({ ft: "FT Total", h1: "1H Total", h2: "2H Total", team_a: "Team A Total", team_b: "Team B Total", h1_team_a: "1H Team A", h1_team_b: "1H Team B", q1: "Q1 Total", q1_team_a: "Q1 Team A", q1_team_b: "Q1 Team B", q2: "Q2 Total", q3: "Q3 Total", q4: "Q4 Total", hq: "Highest Quarter", lq: "Lowest Quarter" })[key] || String(key || "").toUpperCase();
+    return ({ ft: "FT Total", team_a: "Team A Total", team_b: "Team B Total", q1: "P1 Total", q1_team_a: "P1 Team A", q1_team_b: "P1 Team B", q2: "P2 Total", q3: "P3 Total", q4: "OT Total", hq: "Highest Period", lq: "Lowest Period" })[key] || String(key || "").toUpperCase();
   }
   function apRIMarketKeyFromField(id) {
     return ({ ftMarket: "ft", h1Market: "h1", h2Market: "h2", teamAMarket: "team_a", teamBMarket: "team_b", h1TeamAMarket: "h1_team_a", h1TeamBMarket: "h1_team_b", q1Market: "q1", teamAQ1Market: "q1_team_a", teamBQ1Market: "q1_team_b", q2Market: "q2", q3Market: "q3", q4Market: "q4", hqMarket: "hq", lqMarket: "lq" })[id] || "";
@@ -34303,7 +34172,7 @@ function bindMulti() {
         }
       }
       let thresholdAnalyses = [];
-      const thresholdBuckets = ["ft", "h1", "team", "h1team", "winner", "quarter", "qext"];
+      const thresholdBuckets = ["ft", "team", "winner", "quarter", "qext"];
       for (let i = 0; i < thresholdBuckets.length; i++) {
         await bbALYieldToBrowser();
         thresholdAnalyses.push(bbALAnalyzeThresholdBucket(thresholdBuckets[i]));
@@ -35057,7 +34926,7 @@ function bindMulti() {
       const fd = bboFdr(cells), nl = bboNull(rows, 30), led = bboLedgerRead();
       const state = (c) => c.e.ne >= BBO.UP_MIN_N && c.e.pGood >= BBO.UP_P && c.e.evLo > 0 ? "PROMOTE-ELIGIBLE (shadow)" : c.e.ne >= BBO.DOWN_MIN_N && c.e.pBad >= BBO.DOWN_P ? "DOWNGRADE-ELIGIBLE (shadow)" : c.n >= BBO.MIN_CELL ? "SHADOW" : "OBSERVE";
       const cellRows = cells.slice(0, BBO.MAX_ROWS).map((c) => '<tr><td><b>' + E(c.league) + '</b><small>' + E(c.mk) + ' · ' + E(c.grp) + '</small></td><td>' + c.n + '</td><td>' + pc(c.w, c.n) + '</td><td>' + (c.e.pGood * 100).toFixed(0) + '%</td><td>' + state(c) + '</td><td>' + Math.max(0, Math.ceil(BBO.DOWN_MIN_N - c.e.ne)) + '</td><td>' + Math.max(0, Math.ceil(BBO.UP_MIN_N - c.e.ne)) + '</td></tr>').join("") || '<tr><td colspan="7" class="bbal-empty">No eligible graded games yet.</td></tr>';
-      const famRows = ["ft", "h1", "team", "h1team", "quarter", "qext", "winner"].map((k) => '<tr><td>' + k + '</td><td>' + (F.fam[k] || 0) + '</td><td>' + Math.max(0, BB_AL_MIN_THRESHOLD_EVENTS - (F.fam[k] || 0)) + '</td></tr>').join("");
+      const famRows = ["ft", "team", "quarter", "qext", "winner"].map((k) => '<tr><td>' + ({ quarter: "period", qext: "highest/lowest period" }[k] || k) + '</td><td>' + (F.fam[k] || 0) + '</td><td>' + Math.max(0, BB_AL_MIN_THRESHOLD_EVENTS - (F.fam[k] || 0)) + '</td></tr>').join("");
       const whyRows = Object.keys(F.why).sort((a, b) => F.why[b] - F.why[a]).map((k) => '<tr><td>' + E(k) + '</td><td>' + F.why[k] + '</td></tr>').join("");
       return bboPowersHtml() + '<section class="bbal-card"><div class="bbal-card-head"><div><div class="bbal-card-title">Overseer evidence tracker</div><div class="bbal-card-sub">Learns from PLAY and threshold-blocked NO PLAY picks. Replays what the Overseer would have done and grades it against the baseline. A live power appears in the card above only after every evidence bar passes.</div></div></div><div class="bbal-tablewrap"><table><thead><tr><th>Walk-forward replay</th><th>Picks</th><th>Hit</th><th>ROI @1.85</th></tr></thead><tbody>'
         + '<tr><td>Baseline engine PLAYs</td><td>' + bt.base.n + '</td><td>' + pc(bt.base.w, bt.base.n) + '</td><td>' + roi(bt.base) + '</td></tr>'
@@ -35332,7 +35201,7 @@ function bindMulti() {
       const nv = bbALLegacyActualValue(orig, mk, b.roleA);
       if (nv != null && nv !== m.actualValue) { m.actualValueBeforeRepair = m.actualValue; m.actualValue = nv; fixed++; touched.push(b); }
     });
-    if (fixed) { bbALInvalidateCaches(true); touched.forEach((b) => bbALSaveBatch(b)); bbALSaveMeta(); bbBrLog("Repaired " + fixed + " legacy quarter/2H actual values (old parser kept one team's points instead of the combined total)."); bbBrSave(); }
+    if (fixed) { bbALInvalidateCaches(true); touched.forEach((b) => bbALSaveBatch(b)); bbALSaveMeta(); bbBrLog("Repaired " + fixed + " legacy period actual values (old parser kept one team's goals instead of the combined total)."); bbBrSave(); }
     return fixed;
   }
   function bbBrCapAudit() {
@@ -35420,7 +35289,7 @@ function bindMulti() {
   if (window.bbOmega) return;
   const VERSION = "OMEGA-1.2-LEDGER-FACTS";
   const LS_KEY = "BB_OMEGA_STATE_V1", KV_DB = "BB_OMEGA_DB_V1", KV_STORE = "kv";
-  const ALLOW = ["_bbErfc","_bbGetConfidenceGradeRaw","_bbRawLeagueEdgePointThreshold","_normalCdf","anchorProjection","anchorProjectionForMarket","applyBBMarketGate","applyD13EceGradeCap","applySiblingMarketContradictionGate","applySmartLineToPick","applyWideRangeGate","avg","avgOrNaN","bb710ApplyGate","bb710BuildRecentFormComponents","bb710ResolveComponentLines","bb710EvaluateRecentForm","bb710BoxFallback","bb710BoxNums","bb710BoxPair","bb710Count","bb710CutoffMs","bb710Evaluate","bb710EvaluateMargin","bb710FillQuarterBoxes","bb710FixtureSeries","bb710FormSeries","bb710FtSeries","bb710GateRowsFromGames","bb710H2H","bb710H2HMargins","bb710LastOwnHalfRows","bb710LeagueKey","bb710MarginSeries","bb710Parse","bb710PrerequisiteReason","bb710RegulationRows","bb710ScoreQuarters","bb710Series","bb710Sum","bb710TeamTotalSeries","bb710Valid","bb710Value","bbAdjustTeamStats","bbAdvSeries","bbAdvancedAsOfCutoff","bbApplyTeamMemoryAvoid","bbAuditSelectableLeagueFormats","bbConditionalWinProbability","bbEvalForPick","bbEventStrictlyBeforeCutoff","bbFirstHalfFromScore","bbFitRowMeans","bbFitShrinkFromTracker","bbFitShrinkRows","bbH2HBlend","bbH2HEvidence","bbH2HExpected","bbH2HRampShare","bbHistoricalCutoffActive","bbInjMult","bbIsOtEvent","bbLeagueHCA","bbLeagueSeasonAvg","bbMarginHCA","bbMarginHCAResult","bbMarginMarketThreshold","bbMarginThresholdFloor","bbMaskAdvancedByDate","bbMergeT6IntoIntegrity","bbObservedLeagueMarginThreshold","bbOtAllowance","bbOtCloseness","bbOverEdgeBump","bbParseEventTimeMs","bbPreAdjustmentForMarket","bbPreAdjustmentPair","bbProtectedEdgeFloor","bbProtectedUnderFactorFloor","bbQuarterH1","bbQuartersFromArr","bbQuartersOf","bbQxActualFromQuarters","bbQxCurSeasonType","bbQxGame","bbQxIsKey","bbQxLeagueSample","bbQxLineSanity","bbQxModel","bbQxPeriods","bbQxQ4","bbQxRec4","bbQxRng","bbQxSameComp","bbQxSeedOf","bbQxShares","bbQxSummarise","bbQxTeamGames","bbQxTeamShape","bbQxThreshold","bbQxTrapSample","bbRecentFormEvidence","bbRegFromQuarters","bbRegScore","bbRegradeWithPrice","bbResolvePredictionCutoffMs","bbResolveRecencyWeights","bbRunEngineImpl","bbSampleStats","bbSeriesCount","bbSideOtPoints","bbSignalBucket","bbSignalFitMap","bbSignalLearned","bbSignalLearnedAt","bbSignalModelParams","bbSignalOutcomeProbabilities","bbSignalPredictionTrainingRow","bbSignalProbability","bbSingleQuarterThreshold","bbStaticSeedVolLimit","bbStrictFinite","bbT3Bounds","bbTagsForSeries","bbTeamMemoryCompute","bbTeamMemoryEnabled","bbTeamMemoryNearDuplicates","bbTeamSeasonAvg","bbTmBuildStats","bbTmClamp","bbTmExtractGames","bbTmFormDirection","bbTmFormGuard","bbTmGameTs","bbTmLeagueScale","bbTmLevenshtein","bbTmNum","bbTmParseScoreline","bbTmShrunk","bbTrapSample","bbUnderEdgeFactor","bbValidatedH2HFallback","bbVenueBlendAnchorCount","bbVerifiedLeagueParam","bbWinnerMarginSample","bbWithinThisOrLastSeason","buildConfidenceFeatures","buildLooseParsedState","buildResultRows","buildTeamMarketIntelSignal","calculateAdvancedMetrics","clampNumber","cleanSeries","combineVenueDiag","compute1HProjection","computeEffectivePointThreshold","computeFTProjection","computeMarginProjection","computeVenueBlend","countLast10Values","defaultInjuryMeta","derivePeriodAdvanced","detectTrap","detectTrapMeta","extractInputs","filterEventsAsOf","filterNumericSeriesWithParallelDates","finiteCount","forcePickNoPlayWithNote","formatProjectionWhole","getAdvancedStatsEligibility","getAllowedMarketsForLeague","getCombinedOffDefVolatilityRatio","getConfidenceGrade","getConfidenceMarketFamily","getConfidenceModelScopeKey","getConfidenceRank","getConfidenceWinProbability","getDateAwareOrFallbackAverage","getDisplayedEdgeThreshold","getDynamicWeights","getEffectivePaceClamp","getEmpiricalH1VolatilityScale","getFatigueMarketScale","getFetchedSeries","getFixtureSideRole","getH2HInputCount","getH2HSeries","getH2HWeight","getLeagueEdgePointThreshold","getLeagueEdgePointThreshold_BASE","getLeagueFormatStatus","getLeagueMarketEligibility","getLeagueRecencyDefaults","getLeagueRegulationMinutes","getLeagueRegulationPeriods","getLeagueScoreBase","getLeagueVolLimit","getLearnedLeagueStats","getLearnedRecencyWeights","getLineMoveAgainstSide","getLineSanityBands","getLockedParam","getManualAllowedSeries","getManualAllowedSeries_RAW","getManualSeries","getManualSeries_RAW","getManualVenueSeriesForSide","getMarginPick","getMarketECE","getMarketKeyFromName","getMarketVolLimit","getMassacreH2HSeries","getOverallSeries","getPaceSeriesValue","getParam","getPeriodAdvancedSeries","getPick","getRawMarketInputMap","getResolvedInputSource","getResolvedSeriesCount","getResolvedVenueSeries","getSampleTier","getSeasonYearForDateAndLeague","getTeamMemoryAdjustment","getTunableConstant","getTunableParam","getTunerEligibilityStateForCount","getVenueBlendWeights","getWideRangeThreshold","injuryOpponentBoostMultiplier","isConfidenceCoeffFitted","isConfidenceModelFitted","isMarketRangePlayBlocked","isPlausibleBasketballPace","isRetainedMarketKey","isVenueNeutral","isVenueSplitLast10Field","last10SeriesFieldIds","maybeReadH2HEnabled","noPlayProjectionResult","normalizeAsOfCutoff","normalizeBasketballPace","normalizeLeagueKey","parseGames","parseMarketLine","parseMarketRangeMeta","readLooseSeries","readVal","resolveConfidenceGradeFromWinProbability","resolveFtSeries","resolvePredictionAsOf","runEngine","safeArr","sanitizePredictionResult","selectLock","selectedSideEdgeForProbability","setManualSource","setTeamInputIntegrityTag","stdDev","stripOTFromScores","updateLeagueVolCache","validateAdvancedObservationAlignment","validateInputIntegrityForRun","validateLines","validateLinesFromExtracted","validateRequiredPredictionData","weightedRecentAverage","weightedRecentAverageByDate"];
+  const ALLOW = ["_bbErfc", "_normalCdf", "applySmartLineToPick", "avg", "avgOrNaN", "bbAdvSeries", "bbAdvancedAsOfCutoff", "bbApplyTeamMemoryAvoid", "bbAuditSelectableLeagueFormats", "bbEventStrictlyBeforeCutoff", "bbFitRowMeans", "bbH2HRampShare", "bbHistoricalCutoffActive", "bbIsOtEvent", "bbMaskAdvancedByDate", "bbMergeT6IntoIntegrity", "bbOtAllowance", "bbOtCloseness", "bbOverEdgeBump", "bbParseEventTimeMs", "bbPreAdjustmentForMarket", "bbPreAdjustmentPair", "bbProtectedUnderFactorFloor", "bbResolvePredictionCutoffMs", "bbRunEngineImpl", "bbSampleStats", "bbSeriesCount", "bbStrictFinite", "bbT3Bounds", "bbTagsForSeries", "bbTeamMemoryCompute", "bbTeamMemoryEnabled", "bbTeamMemoryNearDuplicates", "bbTmBuildStats", "bbTmClamp", "bbTmExtractGames", "bbTmFormDirection", "bbTmFormGuard", "bbTmGameTs", "bbTmLevenshtein", "bbTmNum", "bbTmParseScoreline", "bbTmShrunk", "bbVenueBlendAnchorCount", "bbVerifiedLeagueParam", "buildLooseParsedState", "buildTeamMarketIntelSignal", "calculateAdvancedMetrics", "clampNumber", "cleanSeries", "combineVenueDiag", "countLast10Values", "defaultInjuryMeta", "derivePeriodAdvanced", "extractInputs", "filterEventsAsOf", "filterNumericSeriesWithParallelDates", "finiteCount", "forcePickNoPlayWithNote", "getAllowedMarketsForLeague", "getConfidenceRank", "getDateAwareOrFallbackAverage", "getFatigueMarketScale", "getFetchedSeries", "getFixtureSideRole", "getH2HInputCount", "getLeagueFormatStatus", "getLeagueMarketEligibility", "getLeagueRegulationMinutes", "getLeagueRegulationPeriods", "getLearnedRecencyWeights", "getLineMoveAgainstSide", "getLockedParam", "getManualAllowedSeries", "getManualAllowedSeries_RAW", "getManualSeries", "getManualSeries_RAW", "getManualVenueSeriesForSide", "getMarketKeyFromName", "getOverallSeries", "getParam", "getPeriodAdvancedSeries", "getRawMarketInputMap", "getResolvedInputSource", "getResolvedSeriesCount", "getResolvedVenueSeries", "getTeamMemoryAdjustment", "getTunableConstant", "getTunableParam", "getTunerEligibilityStateForCount", "getVenueBlendWeights", "isMarketRangePlayBlocked", "isRetainedMarketKey", "isVenueNeutral", "isVenueSplitLast10Field", "last10SeriesFieldIds", "maybeReadH2HEnabled", "normalizeAsOfCutoff", "normalizeLeagueKey", "parseGames", "parseMarketLine", "parseMarketRangeMeta", "readLooseSeries", "readVal", "resolveFtSeries", "resolvePredictionAsOf", "runEngine", "safeArr", "selectLock", "setManualSource", "setTeamInputIntegrityTag", "stdDev", "stripOTFromScores", "weightedRecentAverage", "weightedRecentAverageByDate"];
   const BREAKEVEN = 0.5238, DEFAULT_ODDS = 1.909, MS_H = 3600e3;
   const SUP = new Set(["ft", "h1", "h2", "q1", "q2", "q3", "q4", "team_a", "team_b", "h1_team_a", "h1_team_b"]);
   const TOTALS = new Set(["ft", "h1", "h2", "q1", "q2", "q3", "q4"]);
@@ -35815,7 +35684,7 @@ function bindMulti() {
       const a = String(g.aKey || (g.ns ? g.ns + "::" + g.a : g.a || ""));
       if (!h || !a) return;
       const qid = "qx:" + id;
-      if (!store.games[qid]) store.games[qid] = { t: g.t, ut: factLeague(g.league || g.ut || g.utn || "?"), h, a, hr: g.fh != null ? g.fh : g.hr, ar: g.fa != null ? g.fa : g.ar, hp: g.hp || [], ap: g.ap || [], ot: !!g.ot, fr: !!g.fr, rp: g.rp || ((g.hp || []).length === 2 ? 2 : 4), competitionId: g.competitionId == null ? null : String(g.competitionId), competitionName: g.competitionName || null, seasonId: g.seasonId == null ? null : String(g.seasonId), src: g.src || "quarter-store" };
+      if (!store.games[qid]) store.games[qid] = { t: g.t, ut: factLeague(g.league || g.ut || g.utn || "?"), h, a, hr: g.fh != null ? g.fh : g.hr, ar: g.fa != null ? g.fa : g.ar, hp: g.hp || [], ap: g.ap || [], ot: !!g.ot, fr: !!g.fr, rp: g.rp || 3, competitionId: g.competitionId == null ? null : String(g.competitionId), competitionName: g.competitionName || null, seasonId: g.seasonId == null ? null : String(g.seasonId), src: g.src || "quarter-store" };
       if (g.teams) Object.keys(g.teams).forEach((tid) => { if (!store.teams[tid]) store.teams[tid] = g.teams[tid]; });
     });
     
@@ -36149,8 +36018,8 @@ function bindMulti() {
         res.best = best.th; res.gain = { mean: +ci.mean.toFixed(3), low: +ci.low.toFixed(3), high: +ci.high.toFixed(3) };
         const isDefault = best.th.wo === 0.5 && best.th.hc === 0.35 && best.th.rho === 1 && best.th.window === "blend";
         if (isDefault) { res.status = "KEEP"; res.note = "Current blend was already best of " + res.combos + " tested offense/defense, H2H, recency and Last-5/Last-10 window combinations."; }
-        else if (N >= MIN_GAMES && ci.low > 0 && ci.mean >= 0.15 && res.replica.fidelity <= 1.15) { res.status = "PROVEN"; res.note = "Beats the current blend on unseen later games by " + ci.mean.toFixed(2) + " pts MAE (95% range " + ci.low.toFixed(2) + " to " + ci.high.toFixed(2) + ")."; }
-        else if (ci.mean > 0) { res.status = "PROMISING"; res.note = "Better on later games by " + ci.mean.toFixed(2) + " pts but not yet proven (95% range " + ci.low.toFixed(2) + " to " + ci.high.toFixed(2) + "; " + N + " games)."; }
+        else if (N >= MIN_GAMES && ci.low > 0 && ci.mean >= 0.15 && res.replica.fidelity <= 1.15) { res.status = "PROVEN"; res.note = "Beats the current blend on unseen later games by " + ci.mean.toFixed(2) + " goals MAE (95% range " + ci.low.toFixed(2) + " to " + ci.high.toFixed(2) + ")."; }
+        else if (ci.mean > 0) { res.status = "PROMISING"; res.note = "Better on later games by " + ci.mean.toFixed(2) + " goals but not yet proven (95% range " + ci.low.toFixed(2) + " to " + ci.high.toFixed(2) + "; " + N + " games)."; }
         else { res.status = "KEEP"; res.note = "Alternatives did not hold up on unseen later games — settings kept."; }
       }
       return res;
@@ -36265,7 +36134,7 @@ function bindMulti() {
     const full = fitPlattLite(cal); fit.a = full.a; fit.b = full.b;
     fit.calEce = +eceOf(cal.map((x) => ({ p: calApply(full, x.p), w: x.w }))).toFixed(3);
     fit.active = hold.length >= 20 ? (holdCal < holdRaw && llCal <= llRaw + 1e-6) : (fit.calEce < fit.rawEce);
-    fit.note = fit.active ? "Shrink applied: held-out error " + (holdRaw * 100).toFixed(1) + " → " + (holdCal * 100).toFixed(1) + " pts." : "Fit did not beat raw probabilities on later games — left off.";
+    fit.note = fit.active ? "Shrink applied: held-out error " + (holdRaw * 100).toFixed(1) + " → " + (holdCal * 100).toFixed(1) + " goals." : "Fit did not beat raw probabilities on later games — left off.";
     return fit;
   }
   function calibrate(pRaw, push) {
@@ -36279,7 +36148,7 @@ function bindMulti() {
   async function fetchCompetitionFor(lg, id) {
     let comp = null;
     try {
-      if (window.isIceHockeyLeague && window.isIceHockeyLeague(lg) && /^\d+$/.test(String(id))) comp = await fetchSofaHockeyCompetitionForEvent(String(id));
+      if (window.isIceHockeyLeague && window.isIceHockeyLeague(lg) && /^\d+$/.test(String(id))) comp = await fetchHockeyCompetitionForEvent(String(id));
     } catch (_e) { comp = null; }
     return comp;
   }
@@ -36381,10 +36250,10 @@ function bindMulti() {
      
     const cal = calibRows(all).map((x) => ({ p: x.p, w: x.w }));
     if (cal.length >= 60) { const ece = eceOf(cal), gap = mean(cal.map((x) => x.p)) - mean(cal.map((x) => x.w)); S.calibFit = refitCalibration(calibRows(all)); const cf = S.calibFit; S.calib = { n: cal.length, ece: +ece.toFixed(3), gap: +gap.toFixed(3) };
-      if (ece > 0.07) { if (cf.active && S.level >= 2) { const holdOk = cf.holdN >= 20 ? cf.holdCalEce <= 0.07 : cf.calEce <= 0.07; add(holdOk ? "INFO" : "MED", "calibration", holdOk ? "Win probabilities auto-corrected (raw error " + (ece * 100).toFixed(1) + " pts → " + ((cf.holdN >= 20 ? cf.holdCalEce : cf.calEce) * 100).toFixed(1) + " pts)" : "Win probabilities still " + ((cf.holdN >= 20 ? cf.holdCalEce : cf.calEce) * 100).toFixed(1) + " pts off after auto-correction", "Live probabilities are shrunk (a=" + cf.a + ", b=" + cf.b + ") from " + cal.length + " settled plays; grades use the corrected value. " + cf.note, holdOk ? "" : "Keep logging results; the shrink refits automatically every run."); }
-        else add(gap > 0 ? "HIGH" : "MED", "calibration", "Stated win probabilities are off by " + (ece * 100).toFixed(1) + " points on average" + (gap > 0.03 ? " (over-confident)" : ""), "Across " + cal.length + " settled plays. " + (cf.note || ""), S.level < 2 ? "Raise the autopilot level to 2+ so the shrink can be applied." : "Let the calibration refit run; consider tightening grade cut-offs."); } }
+      if (ece > 0.07) { if (cf.active && S.level >= 2) { const holdOk = cf.holdN >= 20 ? cf.holdCalEce <= 0.07 : cf.calEce <= 0.07; add(holdOk ? "INFO" : "MED", "calibration", holdOk ? "Win probabilities auto-corrected (raw error " + (ece * 100).toFixed(1) + " goals → " + ((cf.holdN >= 20 ? cf.holdCalEce : cf.calEce) * 100).toFixed(1) + " goals)" : "Win probabilities still " + ((cf.holdN >= 20 ? cf.holdCalEce : cf.calEce) * 100).toFixed(1) + " goals off after auto-correction", "Live probabilities are shrunk (a=" + cf.a + ", b=" + cf.b + ") from " + cal.length + " settled plays; grades use the corrected value. " + cf.note, holdOk ? "" : "Keep logging results; the shrink refits automatically every run."); }
+        else add(gap > 0 ? "HIGH" : "MED", "calibration", "Stated win probabilities are off by " + (ece * 100).toFixed(1) + " goals on average" + (gap > 0.03 ? " (over-confident)" : ""), "Across " + cal.length + " settled plays. " + (cf.note || ""), S.level < 2 ? "Raise the autopilot level to 2+ so the shrink can be applied." : "Let the calibration refit run; consider tightening grade cut-offs."); } }
      
-    const cps = changepoints(rows); S.changepoints = cps; Object.keys(cps).forEach((mk) => add("MED", "shift-" + mk, mk.toUpperCase() + " projections changed behaviour around " + new Date(cps[mk].at).toLocaleDateString() + " (bias moved " + cps[mk].shift + " pts)", "Statistically significant (t=" + cps[mk].t + ") — usually an engine change or a data-source change.", "Compare the engine before/after that date; older rows are down-weighted by the lab automatically."));
+    const cps = changepoints(rows); S.changepoints = cps; Object.keys(cps).forEach((mk) => add("MED", "shift-" + mk, mk.toUpperCase() + " projections changed behaviour around " + new Date(cps[mk].at).toLocaleDateString() + " (bias moved " + cps[mk].shift + " goals)", "Statistically significant (t=" + cps[mk].t + ") — usually an engine change or a data-source change.", "Compare the engine before/after that date; older rows are down-weighted by the lab automatically."));
      
     const lab = S.lab.last; if (lab && lab.rows >= 20) { if (lab.memCoverage < 0.4) { const un = Object.keys(S.unresolved).sort((a, b) => S.unresolved[b] - S.unresolved[a]).slice(0, 8); const fg = lab.factGames || 0; add("HIGH", "names", "Memory recognised only " + Math.round(lab.memCoverage * 100) + "% of settled games", (fg < 300 ? "The team-results store holds only " + fg + " games" + (S.storageMb > 3.6 ? " (browser storage was full, so saves were failing; now cleaned)" : "") + ". " : "") + (un.length ? "Unmatched team names: " + un.join(", ") : "Teams have too few prior games in the store."), "Keep predicting: each run now saves team history reliably and the matcher now ignores sponsor/club words (BK, SK, Rapyd, Prague/Praha). Coverage refreshes on the next backtest."); } }
      
@@ -36580,7 +36449,7 @@ function bindMulti() {
     },
     coreLab: {
       title: "Core Lab — offense/defense and recent H2H",
-      body: `<p>The Core Lab tests alternative settings for the full-game (FT) and first-half (H1) score-projection blends. Its base calculation combines each team’s scoring and points allowed, adds a limited head-to-head component when enough meetings are recorded, and can decay the weight of older games.</p><ul><li><strong>FT / H1 status:</strong> evidence state for the relevant market family.</li><li><strong>Best offense / H2H cap / decay:</strong> the candidate settings examined by the lab.</li><li><strong>Live setting:</strong> settings that were actually promoted into use.</li><li><strong>Canary:</strong> when settings change, subsequent results are monitored for deterioration and can trigger rollback.</li></ul><p>The current report says it needs 120+ settled games with recorded score series for a proven change. Until evidence is sufficient, the existing settings remain in place. Only a PROVEN result can be automatically applied, and only at autopilot level 3 when the other guards allow it.</p>`
+      body: `<p>The Core Lab tests alternative settings for the full-game (FT) score-projection blends. Its base calculation combines each team’s scoring and goals allowed, adds a limited head-to-head component when enough meetings are recorded, and can decay the weight of older games.</p><ul><li><strong>FT / H1 status:</strong> evidence state for the relevant market family.</li><li><strong>Best offense / H2H cap / decay:</strong> the candidate settings examined by the lab.</li><li><strong>Live setting:</strong> settings that were actually promoted into use.</li><li><strong>Canary:</strong> when settings change, subsequent results are monitored for deterioration and can trigger rollback.</li></ul><p>The current report says it needs 120+ settled games with recorded score series for a proven change. Until evidence is sufficient, the existing settings remain in place. Only a PROVEN result can be automatically applied, and only at autopilot level 3 when the other guards allow it.</p>`
     },
     engineDna: {
       title: "Engine DNA — version and change tracking",
@@ -36718,7 +36587,7 @@ function bindMulti() {
      
     body += '<div class="muted" style="margin:10px 0 4px"><b>3 · What it has learned and is applying right now</b></div>';
     const models = Object.keys(g.models || {}).map((k) => g.models[k]).filter((x) => x && x.enabled);
-    body += row("Projection corrections live", models.length ? models.map((x) => esc(x.marketKey) + " " + (x.globalBias >= 0 ? "+" : "") + Number(x.globalBias).toFixed(2) + " pts (n " + x.n + ", gain " + (x.validation ? Number(x.validation.meanMaeImprovement).toFixed(2) : "–") + " MAE)").join("<br>") : "none");
+    body += row("Projection corrections live", models.length ? models.map((x) => esc(x.marketKey) + " " + (x.globalBias >= 0 ? "+" : "") + Number(x.globalBias).toFixed(2) + " goals (n " + x.n + ", gain " + (x.validation ? Number(x.validation.meanMaeImprovement).toFixed(2) : "–") + " MAE)").join("<br>") : "none");
     const tm = Object.keys(g.thresholdMultipliers || {}).filter((k) => Math.abs(Number(g.thresholdMultipliers[k]) - 1) > 1e-9);
     body += row("Edge-threshold changes live", tm.length ? tm.map((k) => esc(k) + " ×" + Number(g.thresholdMultipliers[k]).toFixed(2)).join(", ") : "none · all multipliers 1.00 (no candidate has passed holdout yet)");
     const ap = S.core.applied || {}, apk = Object.keys(ap);
@@ -36765,7 +36634,7 @@ function bindMulti() {
     if (lab && lab.factDiagnostics) { const fd = lab.factDiagnostics; h += '<div class="muted" style="margin:-4px 0 4px;padding:8px 10px;border:1px solid #2a3749;background:#101824">Memory sources: ' + esc(JSON.stringify(lab.factSources || {})) + ' · ledger batches discovered ' + Number(fd.ledgerBatches || 0) + ' · eligible event identities ' + Number(fd.ledgerEvents || 0) + ' · recovered team games ' + Number(fd.ledgerGamesAdded || 0) + ' · exclusions ' + Number(fd.excluded || 0) + ' · backfill persistence ' + esc(fd.backfillPersistence || 'not run') + '</div>'; }
     const unmatchedNames = Object.keys(S.unresolved || {}).sort((a,b)=>(S.unresolved[b]||0)-(S.unresolved[a]||0)).slice(0,8);
     const srFetchDiag = window.__bbSrFetchDiag || {}, srQuarterDiag = window.__srQuarterEnrich || {};
-    if (unmatchedNames.length || (Array.isArray(srFetchDiag.errors) && srFetchDiag.errors.length) || Number(srQuarterDiag.failed||0)) h += '<div class="muted" style="margin:-4px 0 4px;padding:8px 10px;border:1px solid #2a3749;background:#101824">Unmatched OMEGA names: ' + esc(unmatchedNames.join(', ') || 'none') + ' · last Sportradar quarter enrichment: ' + Number(srQuarterDiag.need||0) + ' needed / ' + Number(srQuarterDiag.filled||0) + ' filled / ' + Number(srQuarterDiag.failed||0) + ' failed · request errors: ' + esc((srFetchDiag.errors||[]).join('; ') || 'none recorded') + '</div>';
+    if (unmatchedNames.length || (Array.isArray(srFetchDiag.errors) && srFetchDiag.errors.length) || Number(srQuarterDiag.failed||0)) h += '<div class="muted" style="margin:-4px 0 4px;padding:8px 10px;border:1px solid #2a3749;background:#101824">Unmatched OMEGA names: ' + esc(unmatchedNames.join(', ') || 'none') + ' · last Sportradar period enrichment: ' + Number(srQuarterDiag.need||0) + ' needed / ' + Number(srQuarterDiag.filled||0) + ' filled / ' + Number(srQuarterDiag.failed||0) + ' failed · request errors: ' + esc((srFetchDiag.errors||[]).join('; ') || 'none recorded') + '</div>';
     try { if (window.bbDurable) h += '<details class="sec" data-section="dataSafety" open><summary class="sec-summary"><span class="sec-title">Data safety (durable copy &amp; backup)</span><span class="sec-chevron" aria-hidden="true">▾</span></summary><div class="sec-body">' + window.bbDurable.panelHtml(esc) + '</div></details>'; } catch (_dp) {}
     let polBody = "";
     if (lab) {
@@ -36778,7 +36647,7 @@ function bindMulti() {
     h += sec("coreLab", "Core Lab (all captured markets · learned offense/defense + L5/L10)", S.core.last ? Object.keys(S.core.last).filter((m) => Object.prototype.hasOwnProperty.call(SID, m)).map((m) => { const r = S.core.last[m]; if (!r) return ""; const appKey = Object.keys(S.core.applied).find(k => k.endsWith("|" + m)); const ap = appKey ? S.core.applied[appKey] : null; return row(m.toUpperCase() + ' <span class="tag ' + (r.status === "PROVEN" ? "PROVEN" : esc(r.status)) + '">' + esc(r.status) + "</span>", esc(r.note) + (r.best ? "<br><span class='muted'>offense " + esc(r.best.wo) + " · H2H cap " + esc(r.best.hc) + " · decay " + esc(r.best.rho) + " · window " + esc(r.best.window) + "</span>" : "") + (ap ? row("Applied scoped setting", "offense " + esc(ap.offense) + " · H2H " + esc(ap.h2h) + " · window " + esc(ap.window)) : "")); }).join("") + (S.core.canary ? row("Canary", "watching next 25 results after a change") : "") : "", "Needs recorded score series; collecting from now on.");
     h += sec("engineDna", "Engine DNA", er ? row("Current era", esc(er.id) + " · " + new Date(er.at).toLocaleDateString()) + (S.probation ? row("Probation", "learned corrections at " + Math.round(S.probation.scale * 100) + "% until " + esc(S.probation.needed) + " new results") : row("Status", "stable")) + (er.diffs.length ? '<div class="muted">Last change: ' + esc(er.diffs.slice(0, 6).join(", ")) + "</div>" : "") + (S.cfgChanges[0] ? '<div class="muted">Last settings change: ' + esc(S.cfgChanges[0].diffs.slice(0, 2).join(" | ")) + "</div>" : "") : "", "Not recorded yet.");
     h += sec("watchdog", "Watchdog (" + S.findings.length + ")", S.findings.map((f) => '<div class="row watchdog-row"><span><strong>' + esc(f.title) + '</strong>' + (f.detail ? '<br><span class="muted">' + esc(f.detail) + "</span>" : "") + (f.fix ? '<div class="watchdog-fix"><b>Suggested action:</b> ' + esc(f.fix) + '</div>' : '') + '</span><span><span class="tag ' + esc(f.sev) + '">' + esc(f.sev) + "</span></span></div>").join(""), "No problems found.");
-    if (S.forward && (S.forward.vetoN || S.forward.memN)) h += sec("liveEvidence", "Live (forward) evidence", row("Would-veto plays that settled", S.forward.vetoN + " (" + (S.forward.vetoN ? pc(S.forward.vetoWins / S.forward.vetoN) : "–") + " won)") + row("Memory vs engine error", (S.forward.memoryMae == null ? "–" : esc(S.forward.memoryMae)) + " vs " + (S.forward.engineMae == null ? "–" : esc(S.forward.engineMae)) + " pts (" + S.forward.memN + " games)"), "");
+    if (S.forward && (S.forward.vetoN || S.forward.memN)) h += sec("liveEvidence", "Live (forward) evidence", row("Would-veto plays that settled", S.forward.vetoN + " (" + (S.forward.vetoN ? pc(S.forward.vetoWins / S.forward.vetoN) : "–") + " won)") + row("Memory vs engine error", (S.forward.memoryMae == null ? "–" : esc(S.forward.memoryMae)) + " vs " + (S.forward.engineMae == null ? "–" : esc(S.forward.engineMae)) + " goals (" + S.forward.memN + " games)"), "");
     h += sec("log", "Log", S.log.slice(0, 6).map((l) => '<div class="row"><span class="muted">' + esc(l) + "</span></div>").join(""), "Empty.");
     h += '<details class="bbom-details">' + infoBtn("hardcodePack", "Hardcode pack") + '<summary>Hardcode pack (copy when you are ready to freeze what it learned)</summary><pre>' + esc(hardcodePack()) + '</pre><button type="button" class="alt" onclick="navigator.clipboard&&navigator.clipboard.writeText(window.bbOmega.hardcodePack())">Copy</button></details>';
     h += '<div class="bbom-info-overlay" id="bbomInfoOverlay" aria-hidden="true" onclick="if(event.target===this)window.bbOmega.closeInfo()"><section class="bbom-info-card" role="dialog" aria-modal="true" aria-labelledby="bbomInfoTitle"><div class="bbom-info-head"><h3 id="bbomInfoTitle">Information</h3><button type="button" class="bbom-info-close" onclick="window.bbOmega.closeInfo()">Close ✕</button></div><div class="bbom-info-body" id="bbomInfoBody"></div></section></div>';
@@ -37329,7 +37198,7 @@ function bindMulti() {
 /* BB-ENGINE-SECTION:CSS:CSS-010 END */
 </style>`+
       '<div class="bbgod"><div class="gh"><div class="pill">'+safe(S.status)+'</div><h2>GOD Autonomous Learning System</h2><p class="gm">The learner runs automatically from the engine runtime and settlement hooks. This page is a passive evidence console; there are no manual Run, Backtest or Learn controls.</p><p class="gm">Last inventory: '+safe(inv.at?new Date(inv.at).toLocaleString():"not scanned")+' · last research: '+safe(S.lastResearchAt?new Date(S.lastResearchAt).toLocaleString():"not run")+'</p><p class="gm">Automatic cycle: capture → settle → inventory → historical replay → train → holdout validation → promote/demote → canary → rollback when required.</p></div>'+
-      '<div class="grid">'+stat("Historical completed games",inv.facts&&inv.facts.games!=null?inv.facts.games:"—","from team-results + quarter facts")+stat("Teams in fact store",inv.facts&&inv.facts.teams!=null?inv.facts.teams:"—","identity-resolved teams")+stat("Prediction batches",inv.batches||0,"includes PLAY and NO PLAY records")+stat("Market prediction rows",inv.marketRows||0,"all captured markets")+stat("Verified settled pregame events",inv.uniqueSettledPregameMarketEvents||0,"deduplicated event × market records")+stat("Live PLAY / NO PLAY",plays+" / "+noPlays,"all ledger decisions")+stat("Competition identities",Object.keys(inv.byCompetition||{}).filter(k=>k!=="UNVERIFIED").length,"unverified rows are excluded from exact competition scopes")+stat("Active scoped thresholds",Object.keys(S.scopedThresholdMultipliers||{}).length,"validated per-league/competition/market overlays")+'</div>'+
+      '<div class="grid">'+stat("Historical completed games",inv.facts&&inv.facts.games!=null?inv.facts.games:"—","from team results + period facts")+stat("Teams in fact store",inv.facts&&inv.facts.teams!=null?inv.facts.teams:"—","identity-resolved teams")+stat("Prediction batches",inv.batches||0,"includes PLAY and NO PLAY records")+stat("Market prediction rows",inv.marketRows||0,"all captured markets")+stat("Verified settled pregame events",inv.uniqueSettledPregameMarketEvents||0,"deduplicated event × market records")+stat("Live PLAY / NO PLAY",plays+" / "+noPlays,"all ledger decisions")+stat("Competition identities",Object.keys(inv.byCompetition||{}).filter(k=>k!=="UNVERIFIED").length,"unverified rows are excluded from exact competition scopes")+stat("Active scoped thresholds",Object.keys(S.scopedThresholdMultipliers||{}).length,"validated per-league/competition/market overlays")+'</div>'+
       '<div class="sec"><h3>Data quality and exclusion accounting</h3>'+rows(ex)+'<p class="gm">Fact-store competition identity gaps: '+safe(inv.facts&&inv.facts.missingCompetitionIdentity&&inv.facts.missingCompetitionIdentity.count||0)+'. These records remain visible in the inventory but cannot qualify for exact competition-scoped threshold learning.</p></div>'+
       '<div class="sec"><h3>Records by market</h3>'+rows(inv.byMarket)+'</div><div class="sec"><h3>Records by league</h3>'+rows(inv.byLeague)+'</div><div class="sec"><h3>Decisions and rejection categories</h3>'+rejected+'</div>'+      '<div class="sec"><h3>Settled NO PLAY post-mortem</h3><p class="gm">'+rr.total+' rejected rows · '+rr.settled+' verified settled · '+rr.wins+' wins / '+rr.losses+' losses / '+rr.pushes+' pushes · '+rr.priced+' have recorded pre-game prices · '+(rr.roi==null?'ROI unavailable':(rr.roi*100).toFixed(1)+'% descriptive ROI')+'. This is retrospective diagnosis only; it is never fed into pre-game promotion as hindsight.</p><h3>By rejection gate</h3>'+rejectedRows(rr.byGate)+'<h3>By market</h3>'+rejectedRows(rr.byMarket)+'<h3>By exact competition and market</h3>'+rejectedRows(rr.byScope)+'<h3>Repeated matchups</h3>'+rejectedRows(rr.byPair)+'</div>'+
       '<div class="sec"><h3>Autonomous scope research</h3><p class="gm">Per-league × exact-competition-when-known × market threshold experiments. Minimum 240 distinct settled events, at least 72 chronological holdout events, paired event-level bootstrap, Wilson bound and Benjamini–Hochberg multiple-testing correction. Only scope-specific threshold changes are applied by this supervisor; all original safety, injury, line-integrity, probability and grade gates still run.</p>'+sc+'</div>'+
@@ -37989,28 +37858,15 @@ body.dark-mode #apAllTbl td.apSt-pending,html.dark-mode #apAllTbl td.apSt-pendin
 
 <!-- BB-ENGINE-SECTION:HTML:HTML-012 START | RANGE=66610-66613| CODE_LINES=2 | SHARE=0.12% | NAME=document-closing | CLASS=DOCUMENT-STRUCTURE -->
 <script>
-/* Ice hockey provider wiring for the preserved original interface. */
+/* Ice hockey provider wiring for the preserved original interface (Sportradar stats feed). */
 (function () {
   "use strict";
   const SPORT = "ice-hockey";
-  const BASE = "https://api.sofascore.com/api/v1";
+  const CACHE_KEY = "BB_SR_HOCKEY_LEAGUES_V1";
+  const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
   let leagueCatalogPromise = null;
-  const fallbackCompetitions = [
-    ["International", "IIHF World Championship"], ["International", "World Junior Championship"],
-    ["International", "Olympic Games"], ["International", "IIHF Women's World Championship"],
-    ["United States", "NHL"], ["United States", "AHL"], ["United States", "ECHL"],
-    ["United States", "NCAA Men"], ["United States", "NCAA Women"], ["United States", "USHL"],
-    ["Canada", "OHL"], ["Canada", "WHL"], ["Canada", "QMJHL"], ["Canada", "U Sports"],
-    ["Russia", "KHL"], ["Russia", "VHL"], ["Russia", "MHL"],
-    ["Sweden", "SHL"], ["Sweden", "HockeyAllsvenskan"], ["Sweden", "HockeyEttan"],
-    ["Finland", "Liiga"], ["Finland", "Mestis"], ["Germany", "DEL"], ["Germany", "DEL2"],
-    ["Switzerland", "National League"], ["Switzerland", "Swiss League"],
-    ["Czechia", "Extraliga"], ["Slovakia", "Extraliga"], ["Austria", "ICE Hockey League"],
-    ["Norway", "EliteHockey Ligaen"], ["Denmark", "Metal Ligaen"], ["United Kingdom", "Elite Ice Hockey League"],
-    ["France", "Ligue Magnus"], ["Poland", "Polska Hokej Liga"], ["Italy", "Alps Hockey League"],
-    ["Japan", "Asia League Ice Hockey"], ["Kazakhstan", "Pro Hokei Ligasy"], ["Hungary", "Erste Liga"]
-  ];
   const norm = function (v) { return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, ""); };
+  const txt = function (v) { return String(v == null ? "" : v).trim(); };
   window.isIceHockeyLeague = function (league) { return /^ih_/.test(String(league || "").trim()); };
   window.getSelectedIceHockeyLeagueMeta = function () {
     const select = document.getElementById("leagueSelect");
@@ -38019,75 +37875,72 @@ body.dark-mode #apAllTbl td.apSt-pending,html.dark-mode #apAllTbl td.apSt-pendin
     return {
       key: String(option.value),
       id: String(option.dataset.iceHockeyTournamentId || "").trim(),
+      seasonId: String(option.dataset.iceHockeySeasonId || "").trim(),
       name: String(option.dataset.iceHockeyLeagueName || option.textContent || "").trim(),
       category: String(option.dataset.iceHockeyCategory || "").trim(),
     };
   };
-  function arrayFromPayload(payload) {
-    if (!payload || typeof payload !== "object") return [];
-    if (Array.isArray(payload.uniqueTournaments)) return payload.uniqueTournaments;
-    if (Array.isArray(payload.defaultUniqueTournaments)) return payload.defaultUniqueTournaments;
-    if (Array.isArray(payload.tournaments)) return payload.tournaments;
-    if (Array.isArray(payload.uniqueTournamentList)) return payload.uniqueTournamentList;
-    return [];
+
+  // ---- league catalogue -----------------------------------------------------------------
+  // Walks the feed's category/tournament tree. Field names are read defensively because the
+  // tree nests tournaments under country ("realcategory") nodes.
+  function collectTournaments(node, category, out) {
+    if (Array.isArray(node)) { node.forEach(function (n) { collectTournaments(n, category, out); }); return; }
+    if (!node || typeof node !== "object") return;
+    let cat = category;
+    if (node._doc === "realcategory" || (node.cc && typeof node.cc === "object" && (node.tournaments || node.uniquetournaments))) {
+      cat = txt((node.cc && node.cc.name) || node.name || category);
+    }
+    const utid = node._utid != null ? node._utid : (node.utid != null ? node.utid : (node._doc === "uniquetournament" ? node._id : null));
+    const season = node.currentseason != null ? node.currentseason : (node.seasonid != null ? node.seasonid : (node.currentSeasonId != null ? node.currentSeasonId : null));
+    if (utid != null && (node.name || node.abbr) && (node._doc === "tournament" || node._doc === "uniquetournament" || season != null)) {
+      out.push({ id: String(utid), name: txt(node.name || node.abbr), category: cat || "International", seasonId: season != null ? String(season) : "", friendly: !!node.friendly, outdated: node.outdated === true });
+    }
+    Object.keys(node).forEach(function (k) { const v = node[k]; if (v && typeof v === "object") collectTournaments(v, cat, out); });
+  }
+  function readCache() {
+    try {
+      const o = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+      if (o && Array.isArray(o.rows) && o.rows.length) return o;
+    } catch (_e) {}
+    return null;
+  }
+  function writeCache(rows) { try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), rows: rows })); } catch (_e) {} }
+  async function fetchCatalogFromFeed() {
+    const paths = ["config_tree_mini/41/0/" + SR_HOCKEY_SPORT_ID, "config_tree_mini/41/0/" + SR_HOCKEY_SPORT_ID + "/0", "config_tournaments/1/" + SR_HOCKEY_SPORT_ID];
+    const diag = { tried: [] };
+    window.__bbHockeyCatalogDiag = diag;
+    const results = await Promise.allSettled(paths.map(function (p) { return srGet(p, 600000, 15000); }));
+    const rows = new Map();
+    results.forEach(function (r, i) {
+      if (r.status !== "fulfilled") { diag.tried.push({ path: paths[i], ok: false, error: String(r.reason && r.reason.message || r.reason) }); return; }
+      const found = [];
+      collectTournaments(r.value, "", found);
+      diag.tried.push({ path: paths[i], ok: true, tournaments: found.length });
+      found.forEach(function (t) {
+        if (t.outdated) return;
+        const prior = rows.get(t.id);
+        if (!prior || (!prior.seasonId && t.seasonId)) rows.set(t.id, t);
+      });
+    });
+    return Array.from(rows.values());
   }
   async function getCatalog() {
     if (leagueCatalogPromise) return leagueCatalogPromise;
     leagueCatalogPromise = (async function () {
-      const paths = [
-        BASE + "/config/unique-tournaments/en/ice-hockey",
-        BASE + "/config/default-unique-tournaments/US/ice-hockey",
-      ];
-      const all = new Map();
-      await Promise.allSettled(paths.map(async function (url) {
-        const data = await proxyFetch(url, 12000);
-        arrayFromPayload(data).forEach(function (item) {
-          const t = item.uniqueTournament || item.tournament || item;
-          if (!t || t.id == null || !t.name) return;
-          const sportSlug = String(t.category?.sport?.slug || item.category?.sport?.slug || "").toLowerCase();
-          if (sportSlug && sportSlug !== SPORT) return;
-          const id = String(t.id);
-          const category = String(t.category?.name || item.category?.name || "International");
-          all.set(id, { id: id, name: String(t.name), slug: String(t.slug || ""), category: category, categoryId: String(t.category?.id || item.category?.id || ""), userCount: Number(t.userCount || item.userCount || 0) });
-        });
-      }));
-      // Discover every country/category supported by SofaScore, then collect its ice-hockey competitions.
-      // Process in small batches to avoid an excessive burst of requests from the browser.
-      let categories = [];
-      try {
-        const categoryPayload = await proxyFetch(BASE + "/sport/ice-hockey/categories", 12000);
-        categories = Array.isArray(categoryPayload?.categories) ? categoryPayload.categories : [];
-      } catch (_categoryError) {}
-      let countries = Array.from(new Set(categories.map(function (c) { return String(c?.alpha2 || "").trim().toUpperCase(); }).filter(function (x) { return /^[A-Z]{2}$/.test(x); })));
-      if (!countries.length) countries = ["US", "CA", "GB", "SE", "FI", "RU", "DE", "CH", "CZ", "SK", "AT", "NO", "DK", "FR", "PL", "IT", "JP", "KZ", "HU"];
-      for (let i = 0; i < countries.length; i += 8) {
-        const batch = countries.slice(i, i + 8);
-        await Promise.allSettled(batch.map(async function (country) {
-          const data = await proxyFetch(BASE + "/config/default-unique-tournaments/" + country + "/ice-hockey", 12000);
-          arrayFromPayload(data).forEach(function (item) {
-            const t = item.uniqueTournament || item.tournament || item;
-            if (!t || t.id == null || !t.name) return;
-            const sportSlug = String(t.category?.sport?.slug || item.category?.sport?.slug || "").toLowerCase();
-            if (sportSlug && sportSlug !== SPORT) return;
-            const id = String(t.id);
-            const category = String(t.category?.name || item.category?.name || country);
-            const prior = all.get(id);
-            all.set(id, { id: id, name: String(t.name), slug: String(t.slug || ""), category: category, categoryId: String(t.category?.id || item.category?.id || ""), userCount: Number(t.userCount || item.userCount || prior?.userCount || 0) });
-          });
-        }));
-      }
-      return Array.from(all.values()).sort(function (a,b) { return a.category.localeCompare(b.category) || b.userCount-a.userCount || a.name.localeCompare(b.name); });
-    })().catch(function (err) { leagueCatalogPromise = null; throw err; });
+      const cached = readCache();
+      if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.rows;
+      let rows = [];
+      try { rows = await fetchCatalogFromFeed(); } catch (_e) { rows = []; }
+      if (rows.length) { writeCache(rows); return rows; }
+      if (cached) return cached.rows;   // stale cache is better than nothing
+      return [];
+    })();
     return leagueCatalogPromise;
   }
-  function populateFallback(select) {
-    const groups = new Map();
-    fallbackCompetitions.forEach(function (entry) {
-      const category = entry[0], name = entry[1];
-      if (!groups.has(category)) groups.set(category, []);
-      groups.get(category).push({ id: "", name: name, category: category, slug: norm(name) });
-    });
-    renderLeagueOptions(select, Array.from(groups.values()).flat());
+  function sortRows(rows) {
+    const cmp = function (a, b) { return String(a).localeCompare(String(b), undefined, { sensitivity: "base", numeric: true }); };
+    return rows.slice().sort(function (a, b) { return cmp(a.category, b.category) || cmp(a.name, b.name); });
   }
   function renderLeagueOptions(select, rows) {
     const oldValue = String(select.value || "");
@@ -38096,26 +37949,18 @@ body.dark-mode #apAllTbl td.apSt-pending,html.dark-mode #apAllTbl td.apSt-pendin
     placeholder.value = "";
     placeholder.textContent = "- Select Ice Hockey League -";
     select.appendChild(placeholder);
-    const groups = new Map();
-    rows.forEach(function (row) {
-      const category = String(row.category || "International");
-      if (!groups.has(category)) {
-        const group = document.createElement("optgroup");
-        group.label = category;
-        groups.set(category, group);
-        select.appendChild(group);
-      }
+    // The league picker lists options flat, A-Z by label, so options must be in label order.
+    sortRows(rows).forEach(function (row) {
       const option = document.createElement("option");
-      option.value = "ih_" + (row.id ? String(row.id) : "name_" + norm(row.name));
-      option.textContent = category + " — " + row.name;
-      option.dataset.iceHockeyTournamentId = row.id ? String(row.id) : "";
-      option.dataset.iceHockeyLeagueName = String(row.name);
-      option.dataset.iceHockeyCategory = category;
-      option.dataset.iceHockeySlug = String(row.slug || norm(row.name));
+      option.value = "ih_" + row.id;
+      option.textContent = row.category + " — " + row.name;
+      option.dataset.iceHockeyTournamentId = row.id;
+      option.dataset.iceHockeySeasonId = row.seasonId || "";
+      option.dataset.iceHockeyLeagueName = row.name;
+      option.dataset.iceHockeyCategory = row.category;
       option.dataset.sport = SPORT;
-      groups.get(category).appendChild(option);
+      select.appendChild(option);
     });
-    // Only ice hockey league keys (ih_*) are kept across reloads.
     select.value = oldValue && /^ih_/.test(oldValue) ? oldValue : "";
     if (!select.value) select.selectedIndex = 0;
     try { if (window.bbLeaguePicker && typeof window.bbLeaguePicker.refresh === "function") window.bbLeaguePicker.refresh(); } catch (_e) {}
@@ -38123,159 +37968,153 @@ body.dark-mode #apAllTbl td.apSt-pending,html.dark-mode #apAllTbl td.apSt-pendin
   async function loadLeagueOptions() {
     const select = document.getElementById("leagueSelect");
     if (!select) return;
-    try {
-      const rows = await getCatalog();
-      if (rows.length) {
-        renderLeagueOptions(select, rows);
-        try { engineDebug("Ice hockey league catalogue loaded", { competitions: rows.length, provider: "SofaScore" }); } catch (_e) {}
-      } else {
-        populateFallback(select);
-        try { engineDebug("SofaScore returned an empty ice hockey catalogue; displayed fallback competitions", {}); } catch (_e) {}
-      }
-    } catch (err) {
-      populateFallback(select);
-      try { engineDebug("Ice hockey catalogue fetch failed; displayed fallback competitions", { error: err?.message || String(err) }); } catch (_e) {}
+    let rows = [];
+    let failure = "";
+    try { rows = await getCatalog(); } catch (err) { failure = err && err.message ? err.message : String(err); }
+    if (rows.length) {
+      renderLeagueOptions(select, rows);
+      try { engineDebug("Ice hockey league catalogue loaded", { competitions: rows.length, provider: "Sportradar" }); } catch (_e) {}
+      return;
     }
+    select.innerHTML = "";
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = "Could not load ice hockey leagues (Sportradar feed) — see Debug";
+    select.appendChild(o);
+    try { if (window.bbLeaguePicker && typeof window.bbLeaguePicker.refresh === "function") window.bbLeaguePicker.refresh(); } catch (_e) {}
+    leagueCatalogPromise = null;
+    try { engineDebug("Ice hockey league catalogue unavailable", { error: failure, diag: window.__bbHockeyCatalogDiag || null }); } catch (_e) {}
+    // Retry a few times (network blips); each success replaces the placeholder with the sorted list.
+    const attempt = (window.__bbHockeyCatalogRetries = (window.__bbHockeyCatalogRetries || 0) + 1);
+    if (attempt <= 3) setTimeout(loadLeagueOptions, attempt === 1 ? 5000 : attempt === 2 ? 15000 : 45000);
   }
   window.loadIceHockeyLeagueOptions = loadLeagueOptions;
 
-  function eventTournamentId(ev) {
-    const t = ev?.tournament || {};
-    return String(t.uniqueTournament?.id ?? t.id ?? ev?.uniqueTournament?.id ?? "");
-  }
-  function eventTournamentName(ev) {
-    const t = ev?.tournament || {};
-    return String(t.uniqueTournament?.name || t.name || "");
-  }
-  function eventIsInSelectedLeague(ev, meta) {
-    if (!ssIsIceHockeyEvent(ev)) return false;
-    if (meta.id) return eventTournamentId(ev) === meta.id;
-    const wanted = norm(meta.name);
-    const actual = norm(eventTournamentName(ev));
-    if (!wanted || !actual || !(actual === wanted || actual.includes(wanted) || wanted.includes(actual))) return false;
-    // When fallback entries share a competition name, use the country/category as a disambiguator.
-    const eventCategory = String(ev?.tournament?.category?.name || ev?.tournament?.category?.slug || "");
-    const selectedCategory = String(meta.category || "");
-    if (eventCategory && selectedCategory && norm(eventCategory) !== norm(selectedCategory)) {
-      const aliases = { unitedstates: ["usa", "unitedstatesofamerica"], czechia: ["czechrepublic"], unitedkingdom: ["england", "greatbritain"], russia: ["russianfederation"] };
-      const a = aliases[norm(selectedCategory)] || [];
-      const b = aliases[norm(eventCategory)] || [];
-      if (!a.includes(norm(eventCategory)) && !b.includes(norm(selectedCategory))) return false;
-    }
-    return true;
-  }
+  // ---- fixtures ---------------------------------------------------------------------------
   function localDateKeyFromTimestamp(ts) {
     const d = new Date(Number(ts) * 1000);
     if (Number.isNaN(d.getTime())) return "";
-    return [d.getFullYear(), String(d.getMonth()+1).padStart(2,"0"), String(d.getDate()).padStart(2,"0")].join("-");
+    return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, "0"), String(d.getDate()).padStart(2, "0")].join("-");
   }
   function displayDate(ts) {
     const d = new Date(Number(ts) * 1000);
     return Number.isNaN(d.getTime()) ? "" : d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   }
+  async function seasonEvents(meta) {
+    if (!meta || !meta.seasonId) throw new Error("This league has no current season id in the Sportradar catalogue.");
+    let d = await srGet("stats_season_fixtures2/" + encodeURIComponent(meta.seasonId), 60000);
+    let matches = d && Array.isArray(d.matches) ? d.matches : [];
+    if (!matches.length) {
+      try { d = await srGet("stats_season_fixtures2/" + encodeURIComponent(meta.seasonId) + "/1", 60000); matches = d && Array.isArray(d.matches) ? d.matches : []; } catch (_e) {}
+    }
+    const out = [];
+    matches.forEach(function (m) {
+      const ev = srMatchToHockeyEvent(Object.assign({ _tournamentName: meta.name, _utid: meta.id }, m));
+      if (ev && ev.startTimestamp) out.push(ev);
+    });
+    return out;
+  }
+  window.srHockeySeasonEvents = seasonEvents;
   window.loadFixturesIceHockey = async function (league, offset, myToken, absoluteDateKey) {
     const select = document.getElementById("fixtureSelect");
     const meta = window.getSelectedIceHockeyLeagueMeta();
     if (!select || !meta) return;
     const targetKey = absoluteDateKey || getLocalDateKey(offset || 0);
-    // getLocalDateKey() returns YYYYMMDD; the provider and Date parsing need YYYY-MM-DD.
-    const _rawKey = String(targetKey || "");
-    const localDate = /^\d{8}$/.test(_rawKey) ? _rawKey.slice(0, 4) + "-" + _rawKey.slice(4, 6) + "-" + _rawKey.slice(6, 8) : (_rawKey || localDateKeyFromTimestamp(Date.now()/1000));
-    const d = new Date(localDate + "T12:00:00");
-    const dayKeys = [-1,0,1].map(function (delta) { const n = new Date(d); n.setDate(n.getDate()+delta); return [n.getFullYear(),String(n.getMonth()+1).padStart(2,"0"),String(n.getDate()).padStart(2,"0")].join("-"); });
-    const results = await Promise.allSettled(dayKeys.map(function (dateKey) { return proxyFetch(BASE + "/sport/ice-hockey/scheduled-events/" + dateKey, 12000); }));
+    // getLocalDateKey() returns YYYYMMDD; the feed timestamps are compared as YYYY-MM-DD.
+    const rawKey = String(targetKey || "");
+    const localDate = /^\d{8}$/.test(rawKey) ? rawKey.slice(0, 4) + "-" + rawKey.slice(4, 6) + "-" + rawKey.slice(6, 8) : (rawKey || localDateKeyFromTimestamp(Date.now() / 1000));
+    const todayKey = localDateKeyFromTimestamp(Date.now() / 1000);
+    let all = [];
+    let failed = "";
+    try { all = await seasonEvents(meta); } catch (err) { failed = err && err.message ? err.message : String(err); }
     if (myToken !== _fixtureLoadToken) return;
-    const seen = new Set();
-    const events = [];
-    results.forEach(function (result) {
-      if (result.status !== "fulfilled") return;
-      const rows = Array.isArray(result.value?.events) ? result.value.events : [];
-      rows.forEach(function (ev) {
-        const id = String(ev?.id || "");
-        if (!id || seen.has(id)) return;
-        seen.add(id);
-        const ts = Number(ev.startTimestamp) || 0;
-        if (!ts || localDateKeyFromTimestamp(ts) !== localDate) return;
-        const type = String(ev.status?.type || "").toLowerCase();
-        const isFinished = type === "finished" || type === "afterextratime" || type === "aftershootout" || ev.status?.finished === true;
-        // Completed matches are listed only for past dates (results); today and later show upcoming/live matches.
-        if (isFinished && !(localDate < localDateKeyFromTimestamp(Date.now() / 1000))) return;
-        if (!eventIsInSelectedLeague(ev, meta)) return;
-        if (!ev.homeTeam?.name || !ev.awayTeam?.name) return;
-        events.push(ev);
-      });
-    });
-    events.sort(function (a,b) { return (Number(a.startTimestamp)||0) - (Number(b.startTimestamp)||0); });
-    if (myToken !== _fixtureLoadToken) return;
+    const events = all.filter(function (ev) {
+      if (localDateKeyFromTimestamp(ev.startTimestamp) !== localDate) return false;
+      const fin = ev.status.type === "finished";
+      // Completed matches are listed only for past dates (results); today and later show upcoming/live matches.
+      if (fin && !(localDate < todayKey)) return false;
+      if (ev.status.type === "canceled" || ev.status.type === "postponed") return false;
+      return !!(ev.homeTeam.name && ev.awayTeam.name);
+    }).sort(function (a, b) { return a.startTimestamp - b.startTimestamp; });
     select.innerHTML = "";
     const first = document.createElement("option");
     first.value = "";
-    first.textContent = events.length ? "- Select ice hockey match -" : "No matches found for this league/date";
+    if (events.length) first.textContent = "- Select ice hockey match -";
+    else if (failed) first.textContent = "Unable to load matches — " + failed;
+    else {
+      const next = all.filter(function (ev) { return ev.status.type === "notstarted" && ev.startTimestamp * 1000 > Date.now(); }).sort(function (a, b) { return a.startTimestamp - b.startTimestamp; })[0];
+      first.textContent = "No matches found for this league/date" + (next ? " (next: " + new Date(next.startTimestamp * 1000).toLocaleDateString() + ")" : "");
+    }
     select.appendChild(first);
     events.forEach(function (ev) {
-      const home = ev.homeTeam || {}, away = ev.awayTeam || {};
       const opt = document.createElement("option");
       opt.value = String(ev.id);
-      const _fin = String(ev.status?.type || "").toLowerCase() === "finished" || ev.status?.finished === true;
-      let _res = "";
-      if (_fin) {
+      let res = "";
+      if (ev.status.type === "finished") {
         const hg = ssFinalHockeyGoals(ev.homeScore), ag = ssFinalHockeyGoals(ev.awayScore);
-        const _d = String(ev.status?.description || "").toLowerCase();
-        const _sfx = /penalt|shootout/.test(_d) ? " (SO)" : /overtime|aot|extra/.test(_d) ? " (OT)" : "";
-        if (Number.isInteger(hg) && Number.isInteger(ag)) _res = " · FT " + hg + "–" + ag + _sfx;
+        const d = String(ev.status.description || "").toLowerCase();
+        const sfx = /penalt|shootout/.test(d) ? " (SO)" : /overtime|aot|extra/.test(d) ? " (OT)" : "";
+        if (Number.isInteger(hg) && Number.isInteger(ag)) res = " · FT " + hg + "–" + ag + sfx;
       }
-      opt.textContent = String(home.name) + " vs " + String(away.name) + " · " + displayDate(ev.startTimestamp) + _res;
-      opt.dataset.home = String(home.name || "");
-      opt.dataset.homeId = String(home.id || "");
-      opt.dataset.away = String(away.name || "");
-      opt.dataset.awayId = String(away.id || "");
-      opt.dataset.eventDate = new Date(Number(ev.startTimestamp)*1000).toISOString();
+      opt.textContent = ev.homeTeam.name + " vs " + ev.awayTeam.name + " · " + displayDate(ev.startTimestamp) + res;
+      opt.dataset.home = ev.homeTeam.name;
+      opt.dataset.homeId = ev.homeTeam.id;
+      opt.dataset.away = ev.awayTeam.name;
+      opt.dataset.awayId = ev.awayTeam.id;
+      opt.dataset.eventDate = new Date(ev.startTimestamp * 1000).toISOString();
+      opt.dataset.eventTimestamp = String(ev.startTimestamp);
       opt.dataset.eventId = String(ev.id);
-      opt.dataset.tournamentId = eventTournamentId(ev);
-      opt.dataset.source = "sofascore-ice-hockey";
-      opt.dataset.venueName = String(ev.venue?.stadium?.name || ev.venue?.name || "");
-      opt.dataset.venueCity = String(ev.venue?.city?.name || "");
-      opt.dataset.venueCountry = String(ev.venue?.country?.name || "");
+      opt.dataset.srMatchId = String(ev.id);
+      opt.dataset.tournamentId = meta.id;
+      opt.dataset.source = "sportradar";
+      opt.dataset.venueName = String(ev.venue && ev.venue.name || "");
+      opt.dataset.venueCity = String(ev.venue && ev.venue.city && ev.venue.city.name || "");
+      opt.dataset.venueCountry = String(ev.venue && ev.venue.country && ev.venue.country.name || "");
       select.appendChild(opt);
     });
     select.value = "";
-    if (!events.length) {
-      const errors = results.filter(function (r) { return r.status === "rejected"; }).length;
-      if (errors === results.length) first.textContent = "SofaScore fixture feed unavailable — enter teams manually";
-    }
     try { bbUpdateFixtureVenueDisplay(); } catch (_e) {}
-    try { engineDebug("Ice hockey fixtures loaded", { league: meta.name, date: localDate, count: events.length }); } catch (_e) {}
+    try { engineDebug("Ice hockey fixtures loaded", { league: meta.name, date: localDate, count: events.length, error: failed || undefined }); } catch (_e) {}
   };
 
-  async function searchTeams(query) {
-    const q = String(query || "").trim();
+  // ---- teams ----------------------------------------------------------------------------
+  async function leagueTeams(meta) {
+    const evs = await seasonEvents(meta);
+    const byId = new Map();
+    evs.forEach(function (ev) { [ev.homeTeam, ev.awayTeam].forEach(function (t) { if (t && t.id && t.name && !byId.has(t.id)) byId.set(t.id, { id: t.id, name: t.name, shortName: t.shortName }); }); });
+    return Array.from(byId.values());
+  }
+  // Used by the team-name autocomplete: teams of the selected competition's current season.
+  window.srHockeyTeamsForLeague = async function (query) {
+    const meta = window.getSelectedIceHockeyLeagueMeta();
+    if (!meta) return [];
+    const q = norm(query);
     if (q.length < 2) return [];
-    const payload = await proxyFetch(BASE + "/search/teams?q=" + encodeURIComponent(q) + "&sport=ice-hockey", 10000);
-    return ssCollectSearchTeams(payload).filter(function (t) { return t.id && t.name; }).sort(function (a,b) { return (b.score||0)-(a.score||0) || a.name.localeCompare(b.name); });
-  }
-  async function resolveTeamId(name, currentId) {
+    const teams = await leagueTeams(meta);
+    return teams.map(function (t) {
+      const n = norm(t.name), sn = norm(t.shortName);
+      const score = n === q ? 1 : n.indexOf(q) === 0 || sn.indexOf(q) === 0 ? 0.9 : n.indexOf(q) !== -1 || sn.indexOf(q) !== -1 ? 0.7 : 0;
+      return { id: t.id, name: t.name, score: score };
+    }).filter(function (t) { return t.score > 0; }).sort(function (a, b) { return b.score - a.score || a.name.localeCompare(b.name); }).slice(0, 20);
+  };
+  async function resolveTeamId(name, currentId, meta) {
     if (currentId && /^\d+$/.test(String(currentId))) return String(currentId);
-    const found = await searchTeams(name);
-    if (!found.length) throw new Error("SofaScore could not find the ice hockey team: " + name);
+    const teams = await leagueTeams(meta);
     const wanted = norm(name);
-    const exact = found.find(function (t) { return norm(t.name) === wanted; });
-    const chosen = exact || found[0];
-    return String(chosen.id);
+    const exact = teams.filter(function (t) { return norm(t.name) === wanted || norm(t.shortName) === wanted; });
+    if (exact.length === 1) return exact[0].id;
+    const partial = teams.filter(function (t) { return norm(t.name).indexOf(wanted) !== -1 || wanted.indexOf(norm(t.name)) !== -1; });
+    if (partial.length === 1) return partial[0].id;
+    throw new Error("Could not match the team \"" + name + "\" to a team in this competition. Pick it from the suggestions or choose the match from the list.");
   }
-  async function fetchTeamEvents(teamId) {
-    const pages = [0,1,2];
-    const data = await Promise.allSettled(pages.map(function (page) { return proxyFetch(BASE + "/team/" + encodeURIComponent(teamId) + "/events/last/" + page, 12000); }));
-    const seen = new Set();
-    const events = [];
-    data.forEach(function (r) {
-      if (r.status !== "fulfilled") return;
-      const rows = Array.isArray(r.value?.events) ? r.value.events : [];
-      rows.forEach(function (ev) { const id = String(ev?.id || ""); if (id && !seen.has(id)) { seen.add(id); events.push(ev); } });
-    });
-    if (!events.length && data.every(function (r) { return r.status === "rejected"; })) {
-      throw new Error("SofaScore team history request failed for team " + teamId);
-    }
-    return events;
+  async function fetchTeamMatches(teamId) {
+    const d = await srGet("stats_team_lastx/" + encodeURIComponent(teamId) + "/30", 120000);
+    return d && Array.isArray(d.matches) ? d.matches : [];
+  }
+  function mergeEvents(lists) {
+    const seen = new Set(), out = [];
+    lists.forEach(function (list) { (list || []).forEach(function (m) { const ev = srMatchToHockeyEvent(m); if (ev && !seen.has(ev.id)) { seen.add(ev.id); out.push(ev); } }); });
+    return out;
   }
   window.fetchIceHockeyTeamStats = async function () {
     const league = String(document.getElementById("leagueSelect")?.value || "");
@@ -38283,33 +38122,50 @@ body.dark-mode #apAllTbl td.apSt-pending,html.dark-mode #apAllTbl td.apSt-pendin
     const nameA = String(document.getElementById("teamAName")?.value || "").trim();
     const nameB = String(document.getElementById("teamBName")?.value || "").trim();
     const button = document.getElementById("fetchBtn");
-    if (!meta || !window.isIceHockeyLeague(league)) { setStatusText("❌ Select an ice hockey league first.", "err"); return { ok:false }; }
-    if (!nameA || !nameB) { setStatusText("❌ Enter both team names first.", "err"); return { ok:false }; }
-    if (norm(nameA) === norm(nameB)) { setStatusText("❌ Team A and Team B must be different teams.", "err"); return { ok:false }; }
+    if (!meta || !window.isIceHockeyLeague(league)) { setStatusText("❌ Select an ice hockey league first.", "err"); return { ok: false }; }
+    if (!nameA || !nameB) { setStatusText("❌ Enter both team names first.", "err"); return { ok: false }; }
+    if (norm(nameA) === norm(nameB)) { setStatusText("❌ Team A and Team B must be different teams.", "err"); return { ok: false }; }
     if (button) button.disabled = true;
     setFetchAuditIssues([]);
     resetResultsTable();
-    setStatusHTML('<span class="spinner"></span>Fetching ice hockey team results from SofaScore...', "loading");
+    setStatusHTML('<span class="spinner"></span>Fetching ice hockey team results from Sportradar...', "loading");
     try {
       if (g_activeFetchController) g_activeFetchController.abort();
       g_activeFetchController = new AbortController();
       window.__abortSignal = g_activeFetchController.signal;
-      const idA = await resolveTeamId(nameA, selectedTeamIds.A);
-      const idB = await resolveTeamId(nameB, selectedTeamIds.B);
-      if (idA === idB) throw new Error("Team A and Team B resolved to the same SofaScore team ID.");
+      const idA = await resolveTeamId(nameA, selectedTeamIds.A, meta);
+      const idB = await resolveTeamId(nameB, selectedTeamIds.B, meta);
+      if (idA === idB) throw new Error("Team A and Team B resolved to the same team ID.");
       selectedTeamIds.A = idA;
       selectedTeamIds.B = idB;
-      const pair = await Promise.all([fetchTeamEvents(idA), fetchTeamEvents(idB)]);
-      const eventsA = pair[0];
-      const eventsB = pair[1];
+      const jobs = await Promise.allSettled([
+        fetchTeamMatches(idA), fetchTeamMatches(idB),
+        srGet("stats_team_versus/" + encodeURIComponent(idA) + "/" + encodeURIComponent(idB), 120000).then(function (d) { return d && Array.isArray(d.matches) ? d.matches : []; }),
+      ]);
+      const val = function (i) { return jobs[i].status === "fulfilled" ? jobs[i].value : []; };
+      if (jobs[0].status === "rejected" && jobs[1].status === "rejected") throw new Error("Sportradar team history request failed: " + String(jobs[0].reason && jobs[0].reason.message || jobs[0].reason));
+      let eventsA = mergeEvents([val(0), val(2)]);
+      let eventsB = mergeEvents([val(1), val(2)]);
+      window.__fixtureTournamentId = meta.id || null;
+      let statsA = ssProcessTeamEvents(eventsA, idA, "Team A", meta.id || null);
+      let statsB = ssProcessTeamEvents(eventsB, idB, "Team B", meta.id || null);
+      // Teams with few games in this competition in their last 30: look further back (last 100), as the original engine did.
+      const deeper = [];
+      if (statsA.scoredList.length < 10) deeper.push(srGet("stats_team_lastx/" + encodeURIComponent(idA) + "/100", 120000).then(function (d) { return ["A", d && d.matches || []]; }).catch(function () { return ["A", []]; }));
+      if (statsB.scoredList.length < 10) deeper.push(srGet("stats_team_lastx/" + encodeURIComponent(idB) + "/100", 120000).then(function (d) { return ["B", d && d.matches || []]; }).catch(function () { return ["B", []]; }));
+      if (deeper.length) {
+        const more = await Promise.all(deeper);
+        more.forEach(function (pair) {
+          if (pair[0] === "A") eventsA = mergeEvents([pair[1], val(2)]);
+          else eventsB = mergeEvents([pair[1], val(2)]);
+        });
+        statsA = ssProcessTeamEvents(eventsA, idA, "Team A", meta.id || null);
+        statsB = ssProcessTeamEvents(eventsB, idB, "Team B", meta.id || null);
+      }
       window.__lastEventsA = eventsA;
       window.__lastEventsB = eventsB;
-      window.__fixtureTournamentId = meta.id || null;
-      const statsA = ssProcessTeamEvents(eventsA, idA, "Team A", meta.id || null);
-      const statsB = ssProcessTeamEvents(eventsB, idB, "Team B", meta.id || null);
       if (!statsA.scoredList.length && !statsB.scoredList.length) {
-        const note = meta.id ? "No completed games found for both teams in the selected competition." : "No completed ice hockey matches were found for either team.";
-        throw new Error(note + " Check the league/team selection or use the existing SofaScore JSON paste controls.");
+        throw new Error("No completed games found for both teams in the selected competition. Check the league/team selection.");
       }
       AppState.context.data = defaultMassacreFetchContext();
       AppState.context.data.league = league;
@@ -38325,17 +38181,15 @@ body.dark-mode #apAllTbl td.apSt-pending,html.dark-mode #apAllTbl td.apSt-pendin
       const tagB = document.getElementById("bAutoTag");
       if (tagA) tagA.style.display = statsA.scoredList.length ? "inline" : "none";
       if (tagB) tagB.style.display = statsB.scoredList.length ? "inline" : "none";
-      const totalA = statsA.scoredList.length;
-      const totalB = statsB.scoredList.length;
-      const status = "✅ Ice hockey data fetched — " + nameA + ": " + totalA + " completed games; " + nameB + ": " + totalB + " completed games. Goal history, period splits and home/away splits loaded" + (h2hInfo.ok ? "; " + h2hInfo.count + " head-to-head games found." : "; no head-to-head games found in the fetched history.") + " No ice hockey prediction model is installed yet.";
-      setStatusText(status, "ok");
+      const totalA = statsA.scoredList.length, totalB = statsB.scoredList.length;
+      setStatusText("✅ Ice hockey data fetched — " + nameA + ": " + totalA + " completed games; " + nameB + ": " + totalB + " completed games. Goal history, period splits and home/away splits loaded" + (h2hInfo.ok ? "; " + h2hInfo.count + " head-to-head games found." : "; no head-to-head games found.") + " Add the market lines, then press Run.", "ok");
       validateFetchSection();
-      try { engineDebug("Ice hockey team history loaded", { league: meta.name, teamA: { id:idA, games:totalA }, teamB: { id:idB, games:totalB } }); } catch (_e) {}
-      return { ok:true, teamA:statsA, teamB:statsB };
+      try { engineDebug("Ice hockey team history loaded", { league: meta.name, teamA: { id: idA, games: totalA }, teamB: { id: idB, games: totalB } }); } catch (_e) {}
+      return { ok: true, teamA: statsA, teamB: statsB };
     } catch (err) {
       setStatusText("❌ " + (err?.message || String(err)), "err");
       try { engineDebug("Ice hockey fetch failed", { error: err?.message || String(err) }); } catch (_e) {}
-      return { ok:false, error:err?.message || String(err) };
+      return { ok: false, error: err?.message || String(err) };
     } finally {
       if (button) button.disabled = false;
       unlockFetchBtn();
@@ -38347,11 +38201,351 @@ body.dark-mode #apAllTbl td.apSt-pending,html.dark-mode #apAllTbl td.apSt-pendin
     if (!select) return;
     loadLeagueOptions();
   }
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once:true });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once: true });
   else boot();
 })();
 </script>
 
+<script>
+/* Ice hockey prediction model (ih-poisson-v1) wired into the original Run / results / tracker flow.
+   Transparent baseline, not a tuned model:
+   - Goals are modelled per team as Poisson (negative binomial when the league's goal totals are over-dispersed).
+   - Each team's scoring / conceding rate is the recency-weighted mean of its last games, shrunk toward the
+     league average, optionally blended with its home/away split. Expected goals multiply attack x defence x league level.
+   - Head-to-head only nudges the total (small, capped weight).
+   - Totals and period markets are settled on REGULATION time (3 x 20 min); the Winner market includes overtime / shootout.
+   - Grades are uncalibrated probability bands until the tracker has enough settled picks to calibrate them. */
+(function () {
+  "use strict";
+  const MODEL_ID = "ih-poisson-v1";
+  const CFG = {
+    MIN_GAMES: 5,          // games needed in each of the four FT lists
+    DECAY: 0.92,           // recency weight per game back (newest first)
+    PRIOR_GAMES: 20,       // default pseudo-games of league-average evidence; replaced by the competition's own estimate when its season data loads
+    PRIOR_MIN: 4, PRIOR_MAX: 80,
+    VENUE_WEIGHT: 0.5,     // weight of venue-split games relative to overall games
+    H2H_MAX_WEIGHT: 0.15,  // cap on head-to-head influence on the total
+    H2H_PER_GAME: 0.03,
+    SHARE_PRIOR_GOALS: 12, // pseudo-goals for the period-share prior
+    MAX_GOALS: 16,
+    OT_STRENGTH_WEIGHT: 0.5, // how much team strength tilts the overtime/shootout winner away from 50/50
+    GRADE_TOTAL: { A: 0.62, B: 0.57, C: 0.53 },
+    GRADE_WINNER: { A: 0.66, B: 0.61, C: 0.56 },
+    LEAGUE_MIN_GAMES: 30,
+  };
+  const byId = function (id) { return document.getElementById(id); };
+  const fin = function (v) { return typeof v === "number" && Number.isFinite(v); };
+
+  // ---- distributions -------------------------------------------------------------------
+  function pmf(mean, size, max) {
+    const out = new Array(max + 1).fill(0);
+    if (!(mean > 0)) { out[0] = 1; return out; }
+    if (size && size > 0) {              // negative binomial with mean `mean`, size r
+      const p = size / (size + mean);
+      out[0] = Math.pow(p, size);
+      for (let k = 0; k < max; k++) out[k + 1] = out[k] * ((k + size) / (k + 1)) * (1 - p);
+    } else {                             // Poisson
+      out[0] = Math.exp(-mean);
+      for (let k = 0; k < max; k++) out[k + 1] = out[k] * mean / (k + 1);
+    }
+    const s = out.reduce(function (a, b) { return a + b; }, 0);
+    return out.map(function (x) { return x / s; });
+  }
+  function convolve(a, b, max) {
+    const out = new Array(max + 1).fill(0);
+    for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length && i + j <= max; j++) out[i + j] += a[i] * b[j];
+    return out;
+  }
+  // Over/Under probabilities for a distribution of whole goals; handles whole, half and quarter lines.
+  function overUnder(dist, line) {
+    const one = function (L) {
+      let over = 0, under = 0, push = 0;
+      dist.forEach(function (p, k) { if (k > L) over += p; else if (k < L) under += p; else push += p; });
+      return { over: over, under: under, push: push };
+    };
+    const frac = Math.round((line - Math.floor(line)) * 100) / 100;
+    if (frac === 0.25 || frac === 0.75) {
+      const lo = frac === 0.25 ? Math.floor(line) : Math.floor(line) + 0.5, hi = lo + 0.5;
+      const a = one(lo), b = one(hi);
+      return { over: (a.over + b.over) / 2, under: (a.under + b.under) / 2, push: (a.push + b.push) / 2 };
+    }
+    return one(line);
+  }
+
+  // ---- inputs -----------------------------------------------------------------------------
+  function series(id) {
+    const v = parseGames(id);
+    if (v && v.err) return { err: id + ": " + v.err };
+    return Array.isArray(v) ? v : null;
+  }
+  function wmean(list, venueOnly) {          // list is newest first
+    if (!list || !list.length) return { sum: 0, w: 0, n: 0 };
+    let sum = 0, w = 0;
+    list.forEach(function (g, i) { const wi = Math.pow(CFG.DECAY, i); sum += wi * g; w += wi; });
+    return { sum: sum, w: w, n: list.length };
+  }
+  // Recency-weighted rate shrunk toward the league mean `mu`; venue games add evidence at VENUE_WEIGHT.
+  function shrunkRate(overall, venue, mu) {
+    const o = wmean(overall), v = wmean(venue);
+    const sum = o.sum + CFG.VENUE_WEIGHT * v.sum, w = o.w + CFG.VENUE_WEIGHT * v.w;
+    const k = shrunkRate.k || CFG.PRIOR_GAMES;
+    return { rate: (sum + k * mu) / (w + k), n: o.n, nVenue: v.n };
+  }
+  function mean(list) { return list && list.length ? list.reduce(function (a, b) { return a + b; }, 0) / list.length : NaN; }
+
+  // League level from the competition's own completed season matches (cached per competition).
+  const baseCache = new Map();
+  // League level, goal dispersion, period shares, home advantage and the shrinkage strength (empirical Bayes)
+  // from completed games: rows = [{ h: homeId, a: awayId, hg, ag, p: [P1, P2, P3] | null }] in regulation goals.
+  function leagueStatsFromRows(rows) {
+    if (!rows || rows.length < CFG.LEAGUE_MIN_GAMES) return null;
+    const tot = rows.map(function (r) { return r.hg + r.ag; });
+    const m = mean(tot), varT = tot.reduce(function (s, x) { return s + (x - m) * (x - m); }, 0) / (tot.length - 1);
+    const per = [0, 0, 0]; let perGoals = 0;
+    rows.forEach(function (r) { if (r.p) for (let i = 0; i < 3; i++) { per[i] += r.p[i]; perGoals += r.p[i]; } });
+    // per-team goals for / against
+    const t = new Map();
+    const add = function (id, gf, ga) { const o = t.get(id) || { n: 0, gf: 0, ga: 0 }; o.n++; o.gf += gf; o.ga += ga; t.set(id, o); };
+    rows.forEach(function (r) { add(r.h, r.hg, r.ag); add(r.a, r.ag, r.hg); });
+    const teams = Array.from(t.values()).filter(function (o) { return o.n >= 5; });
+    const muHome = mean(rows.map(function (r) { return r.hg; })), muAway = mean(rows.map(function (r) { return r.ag; }));
+    const muTeam = (muHome + muAway) / 2;
+    let k = null;
+    if (teams.length >= 6) {
+      const goals = []; rows.forEach(function (r) { goals.push(r.hg, r.ag); });
+      const varGame = goals.reduce(function (s, x) { return s + (x - muTeam) * (x - muTeam); }, 0) / (goals.length - 1);
+      const nbar = mean(teams.map(function (o) { return o.n; }));
+      const between = function (key) { return teams.reduce(function (s, o) { const d = o[key] / o.n - muTeam; return s + d * d; }, 0) / (teams.length - 1); };
+      const tau2 = Math.max(0.0005, (between("gf") + between("ga")) / 2 - varGame / nbar);
+      k = Math.min(CFG.PRIOR_MAX, Math.max(CFG.PRIOR_MIN, varGame / tau2));
+    }
+    return { n: rows.length, home: muHome, away: muAway, total: m,
+      size: varT > m * 1.05 ? Math.min(200, Math.max(5, (m * m) / (varT - m))) : 0,
+      share: perGoals >= 100 ? per.map(function (x) { return x / perGoals; }) : null, k: k };
+  }
+  async function leagueBase(meta) {
+    if (!meta || !meta.id || typeof window.srHockeySeasonEvents !== "function") return null;
+    if (baseCache.has(meta.id)) return baseCache.get(meta.id);
+    let base = null;
+    try {
+      const evs = await window.srHockeySeasonEvents(meta);
+      const rows = [];
+      evs.forEach(function (ev) {
+        if (ev.status.type !== "finished") return;
+        const h = ssPeriodGoals(ev.homeScore), a = ssPeriodGoals(ev.awayScore);
+        const wentOT = ev.status.description && /overtime|penalt/i.test(ev.status.description);
+        const hr = Number.isFinite(h.regulation) ? h.regulation : (wentOT ? NaN : ssFinalHockeyGoals(ev.homeScore));
+        const ar = Number.isFinite(a.regulation) ? a.regulation : (wentOT ? NaN : ssFinalHockeyGoals(ev.awayScore));
+        if (!Number.isInteger(hr) || !Number.isInteger(ar)) return;
+        rows.push({ h: ev.homeTeam.id, a: ev.awayTeam.id, hg: hr, ag: ar, p: h.periodsComplete && a.periodsComplete ? [0, 1, 2].map(function (i) { return h.p[i] + a.p[i]; }) : null });
+      });
+      base = leagueStatsFromRows(rows);
+    } catch (_e) { base = null; }
+    baseCache.set(meta.id, base);
+    return base;
+  }
+
+  // ---- the model --------------------------------------------------------------------------
+  function buildModel(inp, base) {
+    const aFor = inp.aFTScored, aAg = inp.aFTAllowed, bFor = inp.bFTScored, bAg = inp.bFTAllowed;
+    const pooled = mean([].concat(aFor, aAg, bFor, bAg));
+    const muHome = base ? base.home : pooled, muAway = base ? base.away : pooled;
+    const muTeam = (muHome + muAway) / 2;
+    shrunkRate.k = base && base.k ? base.k : CFG.PRIOR_GAMES;
+    const attA = shrunkRate(aFor, inp.aFTScoredHome, muTeam), defA = shrunkRate(aAg, inp.aFTAllowedHome, muTeam);
+    const attB = shrunkRate(bFor, inp.bFTScoredAway, muTeam), defB = shrunkRate(bAg, inp.bFTAllowedAway, muTeam);
+    let lamH = muHome * (attA.rate / muTeam) * (defB.rate / muTeam);
+    let lamA = muAway * (attB.rate / muTeam) * (defA.rate / muTeam);
+    // head-to-head nudges the total only (never the split)
+    const h2h = (inp.aFTH2H && inp.bFTH2H) ? Math.min(inp.aFTH2H.length, inp.bFTH2H.length) : 0;
+    let h2hWeight = 0;
+    if (h2h >= 3) {
+      const tot = mean(inp.aFTH2H.slice(0, h2h)) + mean(inp.bFTH2H.slice(0, h2h));
+      h2hWeight = Math.min(CFG.H2H_MAX_WEIGHT, CFG.H2H_PER_GAME * h2h);
+      const scale = 1 + h2hWeight * (tot / (lamH + lamA) - 1);
+      lamH *= scale; lamA *= scale;
+    }
+    const M = CFG.MAX_GOALS, size = base && base.size ? base.size : 0;
+    const pH = pmf(lamH, size, M), pA = pmf(lamA, size, M);
+    const totalDist = convolve(pH, pA, 2 * M);
+    // regulation result probabilities and the winner (overtime / shootout included)
+    let pHomeReg = 0, pDraw = 0, pAwayReg = 0;
+    for (let h = 0; h <= M; h++) for (let a = 0; a <= M; a++) { const p = pH[h] * pA[a]; if (h > a) pHomeReg += p; else if (h < a) pAwayReg += p; else pDraw += p; }
+    const tilt = 0.5 + CFG.OT_STRENGTH_WEIGHT * (lamH / (lamH + lamA) - 0.5);
+    const pHomeWin = pHomeReg + pDraw * tilt, pAwayWin = pAwayReg + pDraw * (1 - tilt);
+    // period shares: team period lists, with the league (or equal-thirds) prior
+    const prior = base && base.share ? base.share : [1 / 3, 1 / 3, 1 / 3];
+    const S = [0, 0, 0];
+    for (let p = 1; p <= 3; p++) ["aQ" + p + "Scored", "aQ" + p + "Allowed", "bQ" + p + "Scored", "bQ" + p + "Allowed"].forEach(function (k) {
+      const l = inp[k]; if (l && l.length >= 2) l.forEach(function (g) { S[p - 1] += g; });
+    });
+    const sumS = S[0] + S[1] + S[2];
+    const share = [0, 1, 2].map(function (i) { return (S[i] + prior[i] * CFG.SHARE_PRIOR_GOALS) / (sumS + CFG.SHARE_PRIOR_GOALS); });
+    return { priorK: shrunkRate.k, lamH: lamH, lamA: lamA, pH: pH, pA: pA, totalDist: totalDist, size: size, M: M,
+      pHomeReg: pHomeReg, pDraw: pDraw, pAwayReg: pAwayReg, pHomeWin: pHomeWin, pAwayWin: pAwayWin,
+      share: share, shareFromData: sumS > 0, h2h: h2h, h2hWeight: h2hWeight,
+      n: { aFor: aFor.length, aAg: aAg.length, bFor: bFor.length, bAg: bAg.length }, baseUsed: !!base, muHome: muHome, muAway: muAway };
+  }
+  function periodMax(model, kind) {            // distribution of the highest / lowest period total
+    const dists = model.share.map(function (s) { return pmf((model.lamH + model.lamA) * s, model.size, 14); });
+    const out = new Array(15).fill(0);
+    for (let x = 0; x <= 14; x++) for (let y = 0; y <= 14; y++) for (let z = 0; z <= 14; z++) {
+      const p = dists[0][x] * dists[1][y] * dists[2][z]; if (p < 1e-12) continue;
+      out[kind === "hq" ? Math.max(x, y, z) : Math.min(x, y, z)] += p;
+    }
+    return out;
+  }
+  function gradeFor(p, bands) { return p >= bands.A ? "A" : p >= bands.B ? "B" : p >= bands.C ? "C" : ""; }
+  const f1 = function (x) { return (Math.round(x * 100) / 100).toFixed(2); };
+  const pct = function (x) { return (x * 100).toFixed(1) + "%"; };
+
+  function totalPick(key, name, dist, line, proj, model, extra) {
+    const r = overUnder(dist, line);
+    const overSide = r.over >= r.under;
+    const win = overSide ? r.over : r.under, loss = overSide ? r.under : r.over, push = r.push;
+    const eff = win / Math.max(1e-9, 1 - push);
+    const grade = gradeFor(eff, CFG.GRADE_TOTAL);
+    const side = overSide ? "Over" : "Under";
+    const play = !!grade;
+    const text = play ? side + " " + line : "NO PLAY";
+    return Object.assign({
+      name: name, marketKey: key, line: line, displayLineUsed: line, proj: proj, projection: proj,
+      edge: overSide ? proj - line : line - proj, side: side, winProbability: win, lossProbability: loss, pushProbability: push,
+      confidence: grade, confidenceGrade: grade, confidenceDisplay: grade || "—", pick: text, displayPick: text, predictionText: text,
+      noPlayReason: play ? "" : "Model probability " + pct(eff) + " is below the " + pct(CFG.GRADE_TOTAL.C) + " minimum (" + side + " " + line + ").",
+      whyPick: side + " " + line + ": model " + pct(win) + (push > 0.0005 ? " (push " + pct(push) + ")" : "") + ", expected " + f1(proj) + " goals.",
+      isLock: false, fullModel: true, modelId: MODEL_ID,
+    }, extra || {});
+  }
+
+  function runModel(inp, base, fixture) {
+    const m = buildModel(inp, base);
+    const picks = [];
+    const L = inp.lines;
+    const A = fixture.home, B = fixture.away;
+    const lamTot = m.lamH + m.lamA;
+    const has = function (v) { return fin(v) && v > 0; };
+    if (has(L.ftLine)) picks.push(totalPick("ft", "FT Total", m.totalDist, L.ftLine, lamTot, m));
+    if (has(L.aLine)) picks.push(totalPick("team_a", "Team A Total", m.pH, L.aLine, m.lamH, m));
+    if (has(L.bLine)) picks.push(totalPick("team_b", "Team B Total", m.pA, L.bLine, m.lamA, m));
+    [1, 2, 3].forEach(function (p) {
+      const ln = L["q" + p + "Line"];
+      if (has(ln)) picks.push(totalPick("q" + p, "P" + p + " Total", pmf(lamTot * m.share[p - 1], m.size, 14), ln, lamTot * m.share[p - 1], m));
+    });
+    if (has(L.q1aLine)) picks.push(totalPick("q1_team_a", "Team A P1", pmf(m.lamH * m.share[0], m.size, 12), L.q1aLine, m.lamH * m.share[0], m));
+    if (has(L.q1bLine)) picks.push(totalPick("q1_team_b", "Team B P1", pmf(m.lamA * m.share[0], m.size, 12), L.q1bLine, m.lamA * m.share[0], m));
+    if (has(L.hqLine)) { const d = periodMax(m, "hq"); picks.push(totalPick("hq", "Highest Period", d, L.hqLine, d.reduce(function (s, p, k) { return s + p * k; }, 0), m)); }
+    if (has(L.lqLine)) { const d = periodMax(m, "lq"); picks.push(totalPick("lq", "Lowest Period", d, L.lqLine, d.reduce(function (s, p, k) { return s + p * k; }, 0), m)); }
+    // Winner (moneyline, overtime and shootout included) - needs no line
+    const homeFav = m.pHomeWin >= m.pAwayWin, win = homeFav ? m.pHomeWin : m.pAwayWin;
+    const wGrade = gradeFor(win, CFG.GRADE_WINNER), wName = homeFav ? A : B;
+    const wText = wGrade ? wName + " to win" : "NO PLAY";
+    picks.push({
+      name: "Winner (incl. OT/SO)", marketKey: "winner", line: null, proj: m.lamH - m.lamA, projection: m.lamH - m.lamA,
+      edge: (win - 0.5) * 100, edgePct: (win - 0.5) * 100, edgePctUnit: "percentage_points",
+      side: homeFav ? "home" : "away", winProbability: win, lossProbability: 1 - win, pushProbability: 0,
+      confidence: wGrade, confidenceGrade: wGrade, confidenceDisplay: wGrade || "—",
+      pick: wText, displayPick: wText, predictionText: wGrade ? wName : "NO PLAY",
+      noPlayReason: wGrade ? "" : "Win probability " + pct(win) + " is below the " + pct(CFG.GRADE_WINNER.C) + " minimum.",
+      whyPick: wName + " win probability " + pct(win) + " (regulation " + pct(homeFav ? m.pHomeReg : m.pAwayReg) + ", draw after 60 min " + pct(m.pDraw) + ").",
+      isLock: false, fullModel: true, modelId: MODEL_ID,
+    });
+    return { model: m, picks: picks };
+  }
+
+  // ---- reading the form --------------------------------------------------------------------
+  function readInputs() {
+    const errs = [];
+    const get = function (id) { const v = series(id); if (v && v.err) { errs.push(v.err); return null; } return v; };
+    const inp = {};
+    ["aFTScored", "aFTAllowed", "bFTScored", "bFTAllowed", "aFTScoredHome", "aFTAllowedHome", "bFTScoredAway", "bFTAllowedAway", "aFTH2H", "bFTH2H"].forEach(function (id) { inp[id] = get(id); });
+    for (let p = 1; p <= 3; p++) ["aQ" + p + "Scored", "aQ" + p + "Allowed", "bQ" + p + "Scored", "bQ" + p + "Allowed"].forEach(function (id) { inp[id] = get(id); });
+    const line = function (id) { const v = parseMarketLine((byId(id) && byId(id).value || "").trim()); return bbStrictFinite(v) ? v : null; };
+    inp.lines = { ftLine: line("ftMarket"), aLine: line("teamAMarket"), bLine: line("teamBMarket"), q1Line: line("q1Market"), q2Line: line("q2Market"), q3Line: line("q3Market"),
+      q1aLine: line("teamAQ1Market"), q1bLine: line("teamBQ1Market"), hqLine: line("hqMarket"), lqLine: line("lqMarket"), q4Line: line("q4Market") };
+    return { inp: inp, errs: errs };
+  }
+
+  // ---- results table ------------------------------------------------------------------------
+  const esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+  function renderResults(picks, fixture, model) {
+    const t = byId("results");
+    if (!t) return;
+    let html = "<tr><th>Pick</th><th>Projection</th><th>Edge</th><th>Model Grade</th><th>Prediction</th></tr>";
+    picks.forEach(function (p) {
+      const play = !!p.confidence;
+      const projTxt = p.marketKey === "winner" ? "Δ " + f1(p.proj) + " goals" : f1(p.proj);
+      const edgeTxt = p.marketKey === "winner" ? (p.edge >= 0 ? "+" : "") + p.edge.toFixed(1) + " pts" : (p.edge >= 0 ? "+" : "") + f1(p.edge);
+      const cls = !play ? "pred-noplay" : p.marketKey === "winner" ? (p.side === "home" ? "pred-home" : "pred-away") : (p.side === "Over" ? "pred-over" : "pred-under");
+      html += "<tr><td>" + esc(p.name) + "</td><td>" + projTxt + "</td><td>" + edgeTxt + "</td><td class=\"" + (play ? getConfidenceClass(p.confidence) : "conf-none") + "\">" + esc(p.confidence || "—") + "</td>" +
+        "<td class=\"" + cls + "\" title=\"" + esc(play ? p.whyPick : p.noPlayReason) + "\">" + esc(p.pick) + (play ? "<small class=\"muted-note\">" + pct(p.winProbability) + "</small>" : "") + "</td></tr>";
+    });
+    html += "<tr><td colspan=\"5\" style=\"font-size:11px;opacity:.8\">Expected goals " + esc(fixture.home) + " " + f1(model.lamH) + " – " + f1(model.lamA) + " " + esc(fixture.away) + " (regulation). Totals and periods settle on regulation time; Winner includes OT/SO. Model " + MODEL_ID + ", uncalibrated grades. " +
+      (model.baseUsed ? "League level, home advantage and shrinkage (" + model.priorK.toFixed(0) + " games) from the competition's season." : "Season data unavailable: league level from the two teams' lists, neutral venue, default shrinkage (" + model.priorK + " games).") + "</td></tr>";
+    t.innerHTML = html;
+    t.style.display = "table";
+  }
+
+  // ---- run ------------------------------------------------------------------------------------
+  async function runEngine() {
+    if (window.__engineRunInProgress) return { ok: false, reason: "run-in-progress" };
+    const runBtn = byId("runBtn");
+    window.__engineRunInProgress = true;
+    if (runBtn) runBtn.disabled = true;
+    const fail = function (msg, reason) {
+      try { setStatusText("❌ " + msg, "err"); } catch (_e) {}
+      return { ok: false, sport: "ice-hockey", reason: reason || "invalid-input", message: msg };
+    };
+    try {
+      const league = String(byId("leagueSelect") && byId("leagueSelect").value || "");
+      if (!window.isIceHockeyLeague(league)) return fail("Select an ice hockey league first.", "no-league");
+      const home = String(byId("teamAName") && byId("teamAName").value || "").trim(), away = String(byId("teamBName") && byId("teamBName").value || "").trim();
+      if (!home || !away) return fail("Enter both team names first.", "no-teams");
+      const rd = readInputs();
+      if (rd.errs.length) return fail("Fix the highlighted lists: " + rd.errs.join("; "), "bad-lists");
+      const inp = rd.inp;
+      const short = ["aFTScored", "aFTAllowed", "bFTScored", "bFTAllowed"].filter(function (k) { return !inp[k] || inp[k].length < CFG.MIN_GAMES; });
+      if (short.length) {
+        try { resetResultsTable(); } catch (_e) {}
+        return fail("Need at least " + CFG.MIN_GAMES + " games in each full-time list (missing or too short: " + short.join(", ") + "). Fetch team data first.", "insufficient-data");
+      }
+      const meta = window.getSelectedIceHockeyLeagueMeta();
+      const base = await leagueBase(meta);
+      const fixture = { home: home, away: away };
+      const out = runModel(inp, base, fixture);
+      const fm = typeof getCurrentFixtureMeta === "function" ? getCurrentFixtureMeta() : {};
+      window.__lastRunParsed = inp;
+      window.__lastRunFinalPicks = out.picks;
+      window.__lastRunFinalLines = inp.lines;
+      window.__lastRunLeague = league;
+      window.__lastRunFixtureMeta = fm;
+      renderResults(out.picks, fixture, out.model);
+      const plays = out.picks.filter(function (p) { return !!p.confidence; });
+      let tracked = 0;
+      if (plays.length && !window.__bbAutoParlayRun && typeof addTrackedPicks === "function") {
+        const now = new Date().toISOString();
+        const payload = plays.map(function (p) {
+          return Object.assign({}, p, {
+            league: league, eventId: fm.eventId || "", eventDate: fm.eventDate || null, homeTeam: fm.homeTeam || home, awayTeam: fm.awayTeam || away,
+            homeId: selectedTeamIds.A || null, awayId: selectedTeamIds.B || null, marketName: p.name, lineAtPick: p.line, createdAt: now, inputSource: MODEL_ID,
+          });
+        });
+        try { await addTrackedPicks(payload); tracked = payload.length; } catch (_t) { try { engineDebug("Tracking hockey picks failed", { error: _t && _t.message }); } catch (_e) {} }
+      }
+      setStatusText("✅ " + plays.length + " play" + (plays.length === 1 ? "" : "s") + " of " + out.picks.length + " markets" + (tracked ? " — saved to tracker" : "") + ". Expected goals " + f1(out.model.lamH) + " – " + f1(out.model.lamA) + ".", "ok");
+      try { engineDebug("Ice hockey model run", { model: MODEL_ID, lamH: out.model.lamH, lamA: out.model.lamA, picks: out.picks.length, plays: plays.length, leagueBase: !!base }); } catch (_e) {}
+      return { ok: true, sport: "ice-hockey", model: MODEL_ID, picks: out.picks };
+    } catch (err) {
+      return fail("Model run failed: " + (err && err.message || err), "error");
+    } finally {
+      window.__engineRunInProgress = false;
+      if (runBtn) runBtn.disabled = false;
+    }
+  }
+  window.runEngine = runEngine;
+  window.bbHockeyModel = { id: MODEL_ID, config: CFG, buildModel: buildModel, runModel: runModel, overUnder: overUnder, pmf: pmf, leagueStatsFromRows: leagueStatsFromRows };
+})();
+</script>
 </body>
 </html>
 <!-- BB-ENGINE-SECTION:HTML:HTML-012 END -->
